@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Clients saw empty perk rows for other players and often only part of the host's upgrades
   ([#1](https://github.com/byrodi/dwarf-builds-drg/issues/1)).
+- TAKE BUILD cleared the slot's overclock or upgrade when the code named one this game version does not have. It
+  now keeps the slot's own and says so; the build shows UNKNOWN OVERCLOCK.
 
 Thanks to [Elytras](https://github.com/Elytras) for the report, the analysis and the relay design, which this
 version takes from their rewrite of the mod.

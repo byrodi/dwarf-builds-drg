@@ -594,10 +594,14 @@ def g_class_of_code():
 
 
 def g_decode_slot():
+    """A tier digit above the tier's options, and an overclock number above the item's overclocks, come from a game
+    version that has more of them: the choice is -1 (not 0) and UnknownOc is true (not "no overclock"), so
+    ApplyPart keeps what the slot has instead of clearing it. They show as nothing chosen."""
     g = D()
     P = "DecodeSlot_"
     g.put("item0", P + "Item")
     g.put("oc0", P + "Overclock")
+    g.put("unknownOc0", P + "UnknownOc", "false")
     g.put("digits0", P + "Digits", "")
     g.put("found0", P + "Found", "false")
     g.clear("choices0", g.var(P + "Choices"))
@@ -622,11 +626,14 @@ def g_decode_slot():
     options = g.length(g.brk(UPGRADETIER, g.at(g.var(P + "Tiers"), tier))("upgrades"))
     digit = g.val(KSTR + ":GetSubstring", SourceString=g.var(P + "TierText"), StartIndex=tier, Length="1")
     g.put("keepDigit", P + "Digit", g.stoi(digit))
-    choice = g.val(KML + ":SelectInt", A=g.var(P + "Digit"), B="0", bPickA=g.in_range(g.var(P + "Digit"), "1", options))
+    beyond = g.val(KML + ":SelectInt", A="-1", B="0", bPickA=g.cmp("Greater", g.var(P + "Digit"), options))
+    choice = g.val(KML + ":SelectInt", A=g.var(P + "Digit"), B=beyond,
+                   bPickA=g.in_range(g.var(P + "Digit"), "1", options))
     g.put("keepChoice", P + "Choice", choice)
     g.append("addChoice", g.var(P + "Choices"), g.var(P + "Choice"))
     space = g.pick(" ", "", g.cmp("Greater", tier, "0"))
-    g.put("addDigit", P + "Digits", g.cat(g.var(P + "Digits"), space, g.itos(g.var(P + "Choice"))))
+    shown = g.pick("?", g.itos(g.var(P + "Choice")), g.cmp("Less", g.var(P + "Choice"), "0"))
+    g.put("addDigit", P + "Digits", g.cat(g.var(P + "Digits"), space, shown))
     g.flow("tiers.LoopBody", "keepDigit", "keepChoice", "addChoice", "addDigit")
     # Overclock.
     g.put("keepOcIndex", P + "OcIndex", g.stoi(g.at(g.var(P + "Sub"), "2")))
@@ -634,15 +641,20 @@ def g_decode_slot():
     g.put("keepOcs", P + "OCs", "@ocs.Overclocks")
     g.br("brOc", g.in_range(g.var(P + "OcIndex"), "1", g.length(g.var(P + "OCs"))))
     g.put("setOc", P + "Overclock", g.at(g.var(P + "OCs"), g.sub(g.var(P + "OcIndex"), "1")))
-    g.flow("entry", "item0", "oc0", "digits0", "found0", "choices0", "parse", "brValid", "brSlot", "keepSub", "pad",
+    g.br("brOcBeyond", g.cmp("Greater", g.var(P + "OcIndex"), g.length(g.var(P + "OCs"))))
+    g.put("unknownOc", P + "UnknownOc", "true")
+    g.flow("brOc.else", "brOcBeyond", "unknownOc", "result")
+    g.flow("brOcBeyond.else", "result")
+    g.flow("entry", "item0", "oc0", "unknownOc0", "digits0", "found0", "choices0", "parse", "brValid", "brSlot", "keepSub", "pad",
            "items", "keepItems", "keepIndex", "brIndex", "setItem", "brItem", "setFound", "keepClass", "brClass",
            "keepTiers", "keepText", "tiers")
     g.flow("tiers.Completed", "keepOcIndex", "ocs", "keepOcs", "brOc", "setOc", "result")
     g.flow("brClass.else", "keepOcIndex")
-    g.ends(["brValid.else", "brSlot.else", "brIndex.else", "brItem.else", "brOc.else"], "result")
+    g.ends(["brValid.else", "brSlot.else", "brIndex.else", "brItem.else"], "result")
     g.out("Item", g.var(P + "Item"))
     g.out("Choices", g.var(P + "Choices"))
     g.out("Overclock", g.var(P + "Overclock"))
+    g.out("UnknownOc", g.var(P + "UnknownOc"))
     g.out("Digits", g.var(P + "Digits"))
     g.out("Found", g.var(P + "Found"))
     return g.data()
@@ -1438,7 +1450,9 @@ def g_slot_info():
 def g_apply_code():
     """apply.md section 3: switch to the slot, edit the current loadout, write it back, set the perks (ApplyPerks),
     switch back. The perks go last: SetCurrLoadout writes back the perks it read with the loadout, so perks set
-    before it could be overwritten. Code slots this game does not know (DecodeSlot Found = false) are counted first
+    before it could be overwritten. The loadout is written back as the structs that were read, with only the seven
+    code slots and the selections changed (set fields): a field a later game version adds keeps its value.
+    Code slots this game does not know (DecodeSlot Found = false) are counted first
     (Unknown) and keep the slot's choice; when no slot and no perk of the code is known nothing is touched (known
     perks alone are still applied). Into another slot: after the perks the loadout is read and written once more
     (GetCurrentLoadout, SetCurrLoadout) before switching back, so that slot keeps the new perks."""
@@ -1484,19 +1498,24 @@ def g_apply_code():
     g.put("keepLoadout", P + "Loadout", "@current.ReturnValue")
     lc = g.brk(LOADOUTCOPY, g.var(P + "Loadout"))
     il = g.brk(ITEMLOADOUT, lc("ItemLoadout"))
+    g.put("keepItemsRead", P + "Items", lc("ItemLoadout"))
+    g.put("keepUpgradesRead", P + "Upgrades", lc("UpgradeLoadout"))
     g.put("keepMap", P + "Map", g.brk(UPGRADELOADOUT, lc("UpgradeLoadout"))("Loadout"))
     g.node("guids", "makearray", n=len(SLOTS))
     g.pins("guids", {"[%d]" % k: il(name) for k, name in enumerate(SLOTS)})
     g.put("keepGuids", P + "Guids", "@guids.Array")
     part = g.fori("parts", "0", LAST_SLOT)
     g.do("part", "ApplyPart", Code=code, CodeSlot=part)
-    # Write back the seven code slots (pickaxe included) and their selections; flare, icon, perks and vanity stay.
-    fields = {name: g.at(g.var(P + "Guids"), str(k)) for k, name in enumerate(SLOTS)}
-    fields.update({name: il(name) for name in ("Flare", "iconIndex")})
-    items = g.make("items", ITEMLOADOUT, **fields)
-    upgrades = g.make("upgrades", UPGRADELOADOUT, Loadout=g.var(P + "Map"))
+    # Write back the seven code slots (pickaxe included) and their selections into the structs that were read;
+    # everything else in them (flare, icon, perks, vanity, fields of a later game version) stays.
+    g.node("writeItems", "setfields", struct=ITEMLOADOUT, fields=list(SLOTS))
+    g.pins("writeItems", dict({"StructRef": g.var(P + "Items")},
+                              **{name: g.at(g.var(P + "Guids"), str(k)) for k, name in enumerate(SLOTS)}))
+    g.node("writeUpgrades", "setfields", struct=UPGRADELOADOUT, fields=["Loadout"])
+    g.pins("writeUpgrades", {"StructRef": g.var(P + "Upgrades"), "Loadout": g.var(P + "Map")})
     g.node("write", "setfields", struct=LOADOUTCOPY, fields=["ItemLoadout", "UpgradeLoadout"])
-    g.pins("write", {"StructRef": g.var(P + "Loadout"), "ItemLoadout": items, "UpgradeLoadout": upgrades})
+    g.pins("write", {"StructRef": g.var(P + "Loadout"), "ItemLoadout": g.var(P + "Items"),
+                     "UpgradeLoadout": g.var(P + "Upgrades")})
     g.do("setCurrent", LFL + ":SetCurrLoadout", PlayerId=klass, newLoadout=g.var(P + "Loadout"))
     g.br("brBack", g.and_(g.cmp("NotEqual", slot, g.var(P + "Old")), g.not_("@entry.EquipAfter")))
     g.do("again", LFL + ":GetCurrentLoadout", PlayerId=klass)
@@ -1537,10 +1556,11 @@ def g_apply_code():
     g.flow("known.Completed", "codePerks", "brSome", "ignoreOn", "keepOld", "brSwitch", "switch", "current")
     g.flow("brSome.else", "nothing", "result")
     g.flow("brSwitch.else", "current")
-    g.flow("current", "keepLoadout", "keepMap", "keepGuids", "parts")
+    g.flow("current", "keepLoadout", "keepItemsRead", "keepUpgradesRead", "keepMap", "keepGuids", "parts")
     g.flow("parts.LoopBody", "part")
     g.do("perks", "ApplyPerks", Code=code)
-    g.flow("parts.Completed", "write", "setCurrent", "perks", "brBack", "again", "setAgain", "back", "local")
+    g.flow("parts.Completed", "writeItems", "writeUpgrades", "write", "setCurrent", "perks", "brBack", "again",
+           "setAgain", "back", "local")
     g.flow("brBack.else", "local")
     g.flow("local", "brLocal", "brPlayed", "fromCharacter", "brComp", "fromSave", "disk")
     g.ends(["brLocal.else", "brPlayed.else", "brComp.else"], "disk")
@@ -1560,13 +1580,15 @@ def g_apply_code():
 def g_apply_part():
     """One code slot into ApplyCode_Guids / ApplyCode_Map. Only owned parts; the rest keeps the slot's choice and
     counts as skipped. An unknown slot (Found = false; ApplyCode counted it) changes nothing. A tier or overclock
-    that is 0 in the code is cleared."""
+    that is 0 in the code is cleared. A tier option or an overclock this game does not have (DecodeSlot: choice -1,
+    UnknownOc) keeps what the slot has and counts as unknown (ApplyCode_Unknown), like an unknown slot."""
     g = D()
     P, A = "ApplyPart_", "ApplyCode_"
     g.do("decode", "DecodeSlot", Code="@entry.Code", Slot="@entry.CodeSlot")
     g.put("keepItem", P + "Item", "@decode.Item")
     g.put("keepChoices", P + "Choices", "@decode.Choices")
     g.put("keepOc", P + "Overclock", "@decode.Overclock")
+    g.put("keepUnknownOc", P + "UnknownOc", "@decode.UnknownOc")
     g.br("brFound", "@decode.Found")
     item = g.var(P + "Item")
     g.br("brOwned", g.val(GEARCOMP + ":IsItemOwned", Item=item))
@@ -1587,7 +1609,7 @@ def g_apply_part():
     g.put("keepTiers", P + "Tiers", g.val(GEARCOMP + ":GetItemUpgradeTiers", itemClass=g.var(P + "Class")))
     g.do("pad", KARR + ":Array_Resize", TargetArray=g.var(P + "Choices"),
          Size=g.max_(g.length(g.var(P + "Choices")), g.length(g.var(P + "Tiers"))))
-    g.flow("entry", "decode", "keepItem", "keepChoices", "keepOc", "brFound", "brOwned", "keepClass", "brClass",
+    g.flow("entry", "decode", "keepItem", "keepChoices", "keepOc", "keepUnknownOc", "brFound", "brOwned", "keepClass", "brClass",
            "keepGuid", "setGuid", "countItem", "brSel", "oldSel", "keepUps")
     g.flow("brSel.else", "newSel", "keepUps")
     g.flow("keepUps", "keepOcGuid", "keepTiers", "pad", "tiers")
@@ -1610,7 +1632,10 @@ def g_apply_part():
     g.do("addUp", KARR + ":Array_AddUnique", TargetArray=g.var(P + "Ups"), NewItem=g.guid(g.var(P + "Upgrade")))
     g.incr("countUp", A + "Applied")
     g.incr("skipUp", A + "Skipped")
-    g.flow("tiers.LoopBody", "keepTierUps", "keepChoice", "brNone", "clearNone")
+    g.br("brKeepTier", g.cmp("Less", g.var(P + "Choice"), "0"))
+    g.incr("keepTier", A + "Unknown")
+    g.flow("tiers.LoopBody", "keepTierUps", "keepChoice", "brKeepTier", "keepTier")
+    g.flow("brKeepTier.else", "brNone", "clearNone")
     g.flow("brNone.else", "brRange", "keepUp", "brUp", "brOwnUp", "clearUp", "addUp", "countUp")
     g.flow("brOwnUp.else", "skipUp")
     # Overclock: forged and allowed, else the slot's own stays.
@@ -1632,7 +1657,10 @@ def g_apply_part():
                      "EquippedOverclock": g.var(P + "OcGuid")})
     g.do("store", KMAP + ":Map_Add", TargetMap=g.var(A + "Map"), Key=g.var(P + "Guid"), Value=g.var(P + "Sel"))
     g.flow("tiers.Completed", "brOc", "brCanOc", "brForged", "setOc", "countOc", "write", "store")
-    g.flow("brOc.else", "noOc", "write")
+    g.br("brKeepOc", g.var(P + "UnknownOc"))
+    g.incr("keepOcOwn", A + "Unknown")
+    g.flow("brOc.else", "brKeepOc", "keepOcOwn", "write")
+    g.flow("brKeepOc.else", "noOc", "write")
     g.ends(["brCanOc.else", "brForged.else"], "skipOc")
     g.flow("skipOc", "write")
     return g.data()
@@ -2232,6 +2260,8 @@ def _data_members():
         obj("DecodeSlot_Items", ITEMID, array=True), t("DecodeSlot_Index", I), t("DecodeSlot_Class", "class", ITEM),
         t("DecodeSlot_Tiers", "struct", UPGRADETIER, array=True), t("DecodeSlot_TierText", S), t("DecodeSlot_Digit", I),
         t("DecodeSlot_Choice", I), t("DecodeSlot_OcIndex", I), obj("DecodeSlot_OCs", OVERCLOCK, array=True),
+        t("DecodeSlot_UnknownOc", B), t("ApplyPart_UnknownOc", B),
+        t("ApplyCode_Items", "struct", ITEMLOADOUT), t("ApplyCode_Upgrades", "struct", UPGRADELOADOUT),
         obj("TierOptions_Upgrades", UPGRADE, array=True), t("TierOptions_Class", "class", ITEM),
         t("TierOptions_Tiers", "struct", UPGRADETIER, array=True),
         obj("GetPlayers_State", GAMESTATE), obj("GetPlayers_Players", PS, array=True),

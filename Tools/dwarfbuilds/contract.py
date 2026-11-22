@@ -124,11 +124,13 @@ PUBLIC = {
             # Class of a code; Valid = false for anything that is not a DB1 code of a known class with at least one
             # part whose item index is above 0.
             {"name": "ClassOfCode", "inputs": [t("Code", S)], "outputs": [obj("Class", CHARID), t("Valid", B)]},
-            # One code slot (0..6, common.SLOTS). Choices: one entry per tier of the item, 0 = none, 1..3 = option.
+            # One code slot (0..6, common.SLOTS). Choices: one entry per tier of the item, 0 = none, 1..3 = option,
+            # -1 = an option this game does not have. UnknownOc: the code names an overclock this game does not
+            # have (Overclock is then None). Both show as nothing chosen; TAKE BUILD keeps the slot's own.
             # Digits = the tier digits with spaces ("2 1 3 2 1"). Found = false when the slot is unknown (item 0).
             {"name": "DecodeSlot", "inputs": [t("Code", S), t("Slot", I)],
              "outputs": [obj("Item", ITEMID), t("Choices", I, array=True), obj("Overclock", OVERCLOCK), t("Digits", S),
-                         t("Found", B)]},
+                         t("Found", B), t("UnknownOc", B)]},
             # Perks of a code (its perks part), in code order. Ranks: the local player's rank of each perk, or its
             # highest rank when not owned (for the tooltips). Found = at least one perk of the code is known here.
             {"name": "PerksOfCode", "inputs": [t("Code", S)],
@@ -235,8 +237,9 @@ PUBLIC = {
         # Perk None = empty slot.
         {"name": "Set", "inputs": [obj("Perk", PERKASSET), t("Rank", I)]}]},
     CARD: {"variables": [obj("Data", cls(DATA))], "functions": [
+        # UnknownOc (DecodeSlot): the overclock tile says UNKNOWN OVERCLOCK instead of NO OVERCLOCK.
         {"name": "Show", "inputs": [obj("Item", ITEMID), t("Choices", I, array=True), obj("Overclock", OVERCLOCK),
-                                    t("Digits", S)]}]},
+                                    t("Digits", S), t("UnknownOc", B)]}]},
     GEAR: {"variables": [obj("Data", cls(DATA))], "functions": [
         {"name": "Show", "inputs": [t("Label", S), obj("Item", ITEMID), t("Choices", I, array=True)]}]},
     COLUMN: {"variables": [obj("Window", cls(WINDOW)), obj("Data", cls(DATA)), t("Code", S)], "functions": [

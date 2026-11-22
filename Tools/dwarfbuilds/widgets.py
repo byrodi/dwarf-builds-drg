@@ -737,6 +737,7 @@ def card_members():
         t("LinkList", "object", UMG + "Image", array=True),   # tier row lines, the same index as CellList
         t("TierOpts", "object", UPGRADE, array=True),
         t("CardItem", "object", ITEMID), t("CardOc", "object", OVERCLOCK),
+        t("CardOcUnknown", "bool"),   # the code names an overclock this game does not have (Show's UnknownOc)
         t("OcTitle", "text"), t("OcCategory", "text"), t("OcBody", "text"), t("OcIconTex", "object", TEXTURE),
         t("OcColor", "struct", LINEAR), t("OcFrameTex", "object", TEXTURE),
         t("OcShown", "object", OVERCLOCK),   # the overclock last drawn
@@ -771,7 +772,8 @@ def g_card_show():
     drop_item = [g.tooltip(g.v("NameBtn")), g.put("ItemTipFor")]
     old_oc = g.br(g.and_(g.valid(g.v("OcTipFor")), g.obj_ne(g.v("OcTipFor"), oc)))
     drop_oc = [g.tooltip(g.v("OcBtn")), g.put("OcTipFor")]
-    head = [g.f("EnsureCells"), g.put("CardItem", item), g.put("CardOc", oc), old_item]
+    head = [g.f("EnsureCells"), g.put("CardItem", item), g.put("CardOc", oc),
+            g.put("CardOcUnknown", "@entry.UnknownOc"), old_item]
     g.flow("entry", *head, *drop_item, old_oc, *drop_oc)
     g.flow(old_item + ".else", old_oc)
 
@@ -824,7 +826,8 @@ def g_card_overclock():
              g.set_image("OcIcon", g.v("OcIconTex")),
              g.tint("OcIcon", g.pick_colour(framed, colour(WHITE), colour(INK))),
              g.set_vis(g.v("OcIcon"), g.vis_if(g.valid(g.v("OcIconTex")), "HitTestInvisible", "Collapsed"))]
-    none = [g.set_text("OcName", "NO OVERCLOCK"), g.set_text_colour("OcName", DIM), g.set_text("OcType", ""),
+    name = g.as_text(g.pick_string(g.v("CardOcUnknown"), "UNKNOWN OVERCLOCK", "NO OVERCLOCK"))
+    none = [g.set_text("OcName", name), g.set_text_colour("OcName", DIM), g.set_text("OcType", ""),
             g.set_vis(g.v("OcTypeBox"), "Collapsed"), g.set_image("OcFrame", None), g.tint("OcFrame", EMPTY_TILE),
             g.set_vis(g.v("OcIcon"), "Collapsed"), g.put("OcShown"), g.put("OcFrameTex")]
     g.flow("entry", same)
@@ -1144,7 +1147,7 @@ def g_column_build():
         item = g.pick_obj(out("Found"), out("Item"), ITEMID)
         if slot < 2:
             show = g.f(cls(CARD) + ":Show", target=g.v("Card%d" % (slot + 1)), Item=item, Choices=out("Choices"),
-                       Overclock=out("Overclock"))
+                       Overclock=out("Overclock"), UnknownOc=out("UnknownOc"))
         else:
             show = g.f(cls(GEAR) + ":Show", target=g.v("Gear%d" % (slot - 1)), Label=GEAR_LABELS[slot - 2], Item=item,
                        Choices=out("Choices"))
