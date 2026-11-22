@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bp_dsl import ACTOR, GS, KARR, KMAP, KML, KSL, KSTR, KTXT, UMG, WBL, Graph, ref, t  # noqa: F401,E402
 
 MOD_NAME = "Dwarf Builds"
-MOD_VERSION = "0.1.0"
+MOD_VERSION = "0.2.0"
 CODE_VERSION = "DB1"  # first field of a build code
 SITE_URL = "https://dwarfbuilds.pages.dev"   # the website (BROWSE, PUBLISH MY BUILD, OPEN IN BROWSER)
 
@@ -27,7 +27,8 @@ def cls(path):
 
 # Mod assets (paths). Their classes: cls(path).
 DATA = MOD + "DB_Data"
-SHARE = MOD + "Net/DB_PerkShare_v1"   # replicated layout is frozen: a new layout needs a new path (_v2)
+SHARE = MOD + "Net/DB_PerkShare_v1"   # replicated layout is frozen: a new layout needs a new path
+LINK = MOD + "Net/DB_BuildShare_v2"   # one per player: the player's build code (frozen layout too, see contract)
 CORE = MOD + "DB_Mod"
 INIT_SPACERIG = MOD + "InitSpacerig"
 INIT_CAVE = MOD + "InitCave"

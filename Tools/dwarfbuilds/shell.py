@@ -6,9 +6,11 @@ Layout follows the approved mockup (Main, Copy and Code .dc.html); text and boxe
 first in-game test. The look follows the game's own menus: the brown menu dim, translucent black panels with an
 orange top rule, white Rift Soft titles, Carbon categories and the game's action button (common.game_button).
 UMG font sizes are points at 96 DPI.
-Nothing ticks. The window runs one 1 s timer while it is open. The actor (InitSpacerig/InitCave) waits for input
-and runs a 0.5 s poll for the class selection screen (always on the Space Rig; in missions only for a while after
-BeginPlay and after a selection start); DB_Select sits inside that screen and shows and hides with it.
+The window runs one 1 s timer while it is open; it is the mod's only recurring timer. The actor
+(InitSpacerig/InitCave) waits for input and looks for the class selection screen with a 0.5 s poll only for a
+while after BeginPlay, after a selection start and after a game window opens, until the overlay is attached;
+DB_Select sits inside that screen, shows and hides with it and refreshes itself from its Tick, which runs only
+while it is drawn.
 The website (common.SITE_URL): BROWSE (the third tab) and PUBLISH MY BUILD open it in the Steam overlay, OPEN IN BROWSER in
 the web browser. The clipboard is read only when the player presses PASTE FROM CLIPBOARD.
 """
@@ -24,6 +26,7 @@ from dwarfbuilds.common import HUBMOD, MODHUB  # noqa: E402
 ACTOR = "/Script/Engine.Actor"
 CONTROLLER = "/Script/Engine.Controller"
 PLAYERCONTROLLER = "/Script/Engine.PlayerController"
+PLAYERSTATE = "/Script/Engine.PlayerState"
 GAMEINSTANCE = FSD + "FSDGameInstance"
 CAMERA_LOCATION = FSD + "ECharselectionCameraLocation"
 INPUTLIB = "/Script/Engine.KismetInputLibrary"
@@ -1042,9 +1045,38 @@ def g_win_update_header():
     return g.data()
 
 
+def g_win_roster_same():
+    """Whether the chips already show what UpdateRoster would draw: the same players in the same order, each with
+    the same class and name, and the same filter (Shown) and page. Records them for the next call."""
+    g = Graph()
+    g.call("clearC", KARR + ":Array_Clear", TargetArray=ref(g.get("c0", "RsClasses")))
+    g.call("clearN", KARR + ":Array_Clear", TargetArray=ref(g.get("n0", "RsNames")))
+    player = g.loop("each", g.get("pl0", "Players"))
+    valid(g, "player", player)
+    g.call("cls", PS + ":GetSelectedCharacterID", target=ref(player))
+    g.call("name", PLAYERSTATE + ":GetPlayerName", target=ref(player))
+    g.call("addC", KARR + ":Array_Add", TargetArray=ref(g.get("c1", "RsClasses")), NewItem=ref("cls.ReturnValue"))
+    g.call("addN", KARR + ":Array_Add", TargetArray=ref(g.get("n1", "RsNames")), NewItem=ref("name.ReturnValue"))
+    g.flow("entry", "clearC", "clearN", "each.Exec")
+    g.flow("each.LoopBody", "brPlayer", "addC", "addN")
+    same = kml(g, "samePage", "EqualEqual_IntInt", A=ref(g.get("ps", "PageStart")), B=ref(g.get("rpPage", "RpPage")))
+    for k, (now, last) in enumerate((("Players", "RpPlayers"), ("Shown", "RpShown"), ("RsClasses", "RpClasses"),
+                                     ("RsNames", "RpNames"))):
+        g.call("same%d" % k, KARR + ":Array_Identical", ArrayA=ref(g.get("a%d" % k, now)),
+               ArrayB=ref(g.get("b%d" % k, last)))
+        same = kml(g, "and%d" % k, "BooleanAND", A=ref(same), B=ref("same%d.ReturnValue" % k))
+        g.set("keep%d" % k, last, value=g.get("k%d" % k, now))
+    g.set("setSame", "RsSame", value=same)
+    g.set("keepPage", "RpPage", value=g.get("ps2", "PageStart"))
+    g.flow("each.Completed", "setSame", "keep0", "keep1", "keep2", "keep3", "keepPage", "result")
+    g.link(g.get("out", "RsSame"), "result.Same")
+    return g.data()
+
+
 def g_win_update_roster():
     """One chip per player. Chips are created once and reused. Nothing to do while the roster is hidden
-    (4 or fewer players, or the BUILD CODE tab): SelectPlayer and SetTab refresh it when it shows again."""
+    (4 or fewer players, or the BUILD CODE tab): SelectPlayer and SetTab refresh it when it shows again. Nothing
+    to do either while it shows what it showed (RosterSame): the 1 s refresh then sets no chip."""
     g = Graph()
     g.call("n", KARR + ":Array_Length", TargetArray=ref(g.get("pl", "Players")))
     n = "n.ReturnValue"
@@ -1075,7 +1107,10 @@ def g_win_update_roster():
     g.call("icon", cls(CHIP) + ":SetIcon", target=ref(chip), Texture=ref("head.Icon"))
     g.call("width", cls(CHIP) + ":SetWidth", target=ref(chip), Width=ref(g.get("cw", "ChipWidth")))
     g.call("show", UMG + "Widget:SetVisibility", target=ref(chip), InVisibility="Visible")
-    g.flow("entry", "brBig", "setW", "eachI")
+    g.call("drawn", "RosterSame")
+    g.branch("brDrawn", "drawn.Same")
+    g.flow("entry", "brBig", "drawn", "brDrawn")
+    g.flow("brDrawn.else", "setW", "eachI")
     g.flow("eachI.LoopBody", "chip", "head", "set", "icon", "width", "show")
     # Chips of players who left.
     g.call("nChips", KARR + ":Array_Length", TargetArray=ref(g.get("chips", "Chips")))
@@ -1518,7 +1553,10 @@ ANCHOR_CLASS = "/Game/UI/CharacterSelectionMK2/Lobby_BarTop_Countdown.Lobby_BarT
 SEL_ZORDER = 9999             # the screen's own children there are at 0
 ZORDER_RIG, ZORDER_MISSION = 13, 100   # fallback without the canvas: viewport layers just above the screen
 POLL_SECONDS = "0.5"          # InitSpacerig/InitCave poll for the screen (SelectPoll)
-MISSION_POLL = 60.0           # a mission polls this long after BeginPlay and after each selection start
+POLL_WINDOW = 60.0            # the poll runs at POLL_SECONDS this long after BeginPlay and after each selection start,
+OPEN_WINDOW = 3.0             # and this long after a game window opens (the screen is opened like one),
+STOP_CHECK = "2.0"            # and once this long after a selection stop (a mission's screen is gone by then)
+TICK_GAP = 0.3                # DB_Select: a Tick this long after the last one means the screen was just shown
 CANVAS = UMG + "CanvasPanel"
 CANVASSLOT = UMG + "CanvasPanelSlot"
 ANCHORS = "/Script/Slate.Anchors"
@@ -1855,9 +1893,28 @@ def g_sel_events():
     or loadout change at once instead of at the next 1 s refresh. A cheap check each frame: your class
     (GetSelectedCharacterID, what the column shows) and the save's selected loadout of that class; when either
     changed, your column is shown again (ShowPlayer, which redraws only what changed). Build Inspector does the same
-    check in its Tick."""
+    check in its Tick.
+    The Tick also keeps the columns fresh, so no poll is needed once the overlay sits in the screen: the first
+    Tick after a pause of TICK_GAP (the screen was just shown) fills the columns at once and hides the class
+    description box, then every second while it stays shown. A changed class or loadout is also told to DB_Data
+    (its HostSync a moment later), which sends the new build to the others."""
     g = Graph()
     g.node("tick", "event", name="Tick", **{"class": USERWIDGET})
+    g.call("now", GS + ":GetRealTimeSeconds")
+    pause = kml(g, "pause", "Subtract_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("lastT", "LastTick")))
+    g.set("keepShown", "TickShown", value=kml(g, "shown", "Greater_FloatFloat", A=ref(pause), B=str(TICK_GAP)))
+    g.set("keepTick", "LastTick", value="now.ReturnValue")
+    g.branch("brShown", g.get("shownNow", "TickShown"))
+    g.branch("brDue", kml(g, "due", "GreaterEqual_FloatFloat", A=ref("now.ReturnValue"),
+                          B=ref(g.get("nextT", "NextUpdate"))))
+    for tag in ("A", "B"):
+        g.set("next" + tag, "NextUpdate", value=kml(g, "in1" + tag, "Add_FloatFloat", A=ref("now.ReturnValue"), B="1.0"))
+        g.call("refresh" + tag, "Refresh")
+        g.call("hideDesc" + tag, "HideDesc")
+    g.call("findDescA", "FindDesc")
+    g.flow("tick", "keepShown", "keepTick", "brShown", "nextA", "refreshA", "findDescA", "hideDescA", "brSize")
+    g.flow("brShown.else", "brDue", "nextB", "refreshB", "hideDescB", "brSize")
+    g.flow("brDue.else", "brSize")
     # The overlay's size (it fills the screen's canvas): a new size fits the scale again.
     g.call("size", UMG + "SlateBlueprintLibrary:GetLocalSize", Geometry=ref("tick.MyGeometry"))
     g.call("sizeXY", KML + ":BreakVector2D", InVec=ref("size.ReturnValue"))
@@ -1869,7 +1926,7 @@ def g_sel_events():
     g.set("setW", "ViewW", value="sizeXY.X")
     g.set("setH", "ViewH", value="sizeXY.Y")
     g.call("fit", "FitScale", Count=ref(g.get("tc", "TeamCount")))
-    g.flow("tick", "brSize", "asPs")
+    g.flow("brSize", "asPs")
     g.flow("brSize.else", "setW", "setH", "fit", "asPs")
     # Your column.
     g.call("owner", UMG + "Widget:GetOwningPlayer")
@@ -1885,8 +1942,11 @@ def g_sel_events():
     g.set("setCls", "OwnClass", value="cls.ReturnValue")
     g.set("setIdx", "OwnLoadout", value="idx.ReturnValue")
     g.call("show", cls(COLUMN) + ":ShowPlayer", target=ref(g.get("own", "Own")), Player=ref("asPs.$cast"))
+    valid(g, "shareData", g.get("sd0", "Data"))
+    g.call("shareSoon", KSL + ":K2_SetTimer", Object=ref(g.get("sd1", "Data")), FunctionName="HostSync", Time="0.3",
+           bLooping="false")
     g.flow("asPs", "brHasSave", "brSame")
-    g.flow("brSame.else", "setCls", "setIdx", "show")
+    g.flow("brSame.else", "setCls", "setIdx", "show", "brShareData", "shareSoon")
     return g.data()
 
 
@@ -1974,6 +2034,8 @@ def g_init_try_show():
 
 def g_init_find_screen():
     """ScreenTmp, CanvasTmp: the class selection screen and its full-screen canvas, or None.
+    0. No selection screen widget in this world at all: nothing to find, and only this one scan is made (the
+       usual case while the poll waits for the screen).
     1. Every AnchorClass widget whose owner (outer of its widget tree) is a selection screen that is still part of
        the UI (in the viewport or in a parent); its parent is the canvas. A shown screen wins over a hidden one.
     2. No canvas found: a selection screen in the viewport (shown first), for the viewport fallback.
@@ -1985,7 +2047,14 @@ def g_init_find_screen():
     g.branch("brA", "hasA.ReturnValue")
     g.call("findA", WBL + ":GetAllWidgetsOfClass", WidgetClass=ref(g.get("aCls1", "AnchorClass")), TopLevelOnly="false")
     el = g.loop("eachA", "findA.FoundWidgets")
-    g.flow("entry", "noScr", "noCan", "brA", "findA", "eachA.Exec")
+    g.call("hasProbe", KSL + ":IsValidClass", Class=ref(g.get("sClsP", "ScreenClass")))
+    g.branch("brProbe", "hasProbe.ReturnValue")
+    g.call("probe", WBL + ":GetAllWidgetsOfClass", WidgetClass=ref(g.get("sClsQ", "ScreenClass")), TopLevelOnly="false")
+    g.call("probeN", KARR + ":Array_Length", TargetArray=ref("probe.FoundWidgets"))
+    g.branch("brAny", kml(g, "anyScreen", "Greater_IntInt", A=ref("probeN.ReturnValue"), B="0"))
+    g.flow("entry", "noScr", "noCan", "brProbe", "probe", "brAny", "brA")
+    g.flow("brProbe.else", "brA")
+    g.flow("brA", "findA", "eachA.Exec")
     g.call("tree", KSL + ":GetOuterObject", Object=ref(el))
     g.call("owner", KSL + ":GetOuterObject", Object=ref("tree.ReturnValue"))
     g.call("ownerCls", GS + ":GetObjectClass", Object=ref("owner.ReturnValue"))
@@ -2026,24 +2095,26 @@ def g_init_find_screen():
 
 
 def g_init_poll(rig):
-    """The 0.5 s poll. Space Rig: always (the screen can open at any time; while attached a call costs a few
-    checks). Mission: until MISSION_POLL seconds after BeginPlay or the last selection start (a late join), and on
-    while the overlay sits in a live screen; then it stops itself."""
+    """The search for the class selection screen, every POLL_SECONDS while its timer runs (start_poll). It stops
+    itself as soon as the overlay sits in a live screen's canvas (from then on the overlay shows, hides and
+    refreshes with the screen by itself: DB_Select's Tick), or when the search window is over (PollUntil) and
+    nothing is attached. In the fallback (the overlay in the viewport, no canvas) it goes on while attached: the
+    overlay's visibility then follows the screen through this poll, since a collapsed overlay does not tick.
+    The same on the Space Rig and in a mission."""
     g = Graph()
+    me = g.self_()
     g.call("try", "TryShow")
-    g.flow("entry", "try")
-    if rig:
-        return g.data()
-    g.call("now", GS + ":GetRealTimeSeconds")
-    g.branch("brTime", kml(g, "early", "Less_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("until", "PollUntil"))))
     valid(g, "hasSel", g.get("sel0", "SelectUI"))
     g.call("att", cls(SELECT) + ":IsAttached", target=ref(g.get("sel1", "SelectUI")))
     g.branch("brAtt", "att.Up")
-    g.call("stop", KSL + ":K2_ClearTimer", Object=ref(g.self_()), FunctionName="SelectPoll")
-    g.flow("try", "brTime")
-    g.flow("brTime.else", "brHasSel", "att", "brAtt")
-    g.flow("brAtt.else", "stop")
-    g.flow("brHasSel.else", "stop")
+    valid(g, "canvas", g.get("selCanvas", "Canvas", cls(SELECT), g.get("sel2", "SelectUI")))
+    g.call("now", GS + ":GetRealTimeSeconds")
+    g.branch("brTime", kml(g, "early", "Less_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("until", "PollUntil"))))
+    g.call("stop", KSL + ":K2_ClearTimer", Object=ref(me), FunctionName="SelectPoll")
+    g.flow("entry", "try", "brHasSel", "att", "brAtt", "brCanvas", "stop")
+    g.flow("brAtt.else", "brTime")
+    g.flow("brHasSel.else", "brTime")
+    g.flow("brTime.else", "stop")
     return g.data()
 
 
@@ -2055,27 +2126,28 @@ def g_init_hide_select():
     return g.data()
 
 
-def start_poll(g, nid, rig):
-    """(Re)starts SelectPoll; in a mission it then runs MISSION_POLL seconds from now. Returns first, last node."""
-    steps = []
-    if not rig:
-        g.call(nid + "Now", GS + ":GetRealTimeSeconds")
-        g.set(nid + "Until", "PollUntil",
-              value=kml(g, nid + "Add", "Add_FloatFloat", A=ref(nid + "Now.ReturnValue"), B=str(MISSION_POLL)))
-        steps.append(nid + "Until")
+def start_poll(g, nid, rig, seconds=POLL_WINDOW):
+    """(Re)starts SelectPoll at POLL_SECONDS, for at least `seconds` from now (a longer window that is already
+    running stays). g_init_poll says when it stops. Returns first, last node."""
+    g.call(nid + "Now", GS + ":GetRealTimeSeconds")
+    end = kml(g, nid + "Add", "Add_FloatFloat", A=ref(nid + "Now.ReturnValue"), B=str(seconds))
+    g.set(nid + "Until", "PollUntil", value=kml(g, nid + "Max", "FMax", A=ref(end), B=ref(g.get(nid + "Old", "PollUntil"))))
     me = g.self_()
     g.call(nid + "Clear", KSL + ":K2_ClearTimer", Object=ref(me), FunctionName="SelectPoll")
     g.call(nid + "Set", KSL + ":K2_SetTimer", Object=ref(me), FunctionName="SelectPoll", Time=POLL_SECONDS,
            bLooping="true")
-    steps += [nid + "Clear", nid + "Set"]
+    steps = [nid + "Until", nid + "Clear", nid + "Set"]
     g.flow(*steps)
     return steps[0], steps[-1]
 
 
 def select_events(g, after, rig):
     """Class selection overlay: after `after` (the local player controller is valid) bind the game instance's
-    selection start/stop, start the poll and try once. The poll finds the screen even when the events do not come
-    or come too early. EndPlay unbinds (the game instance outlives the level), stops the poll and detaches."""
+    selection start/stop and the window manager's "first window opened", start the search (start_poll) and try
+    once. Three things start a search, so the overlay does not depend on one event coming at the right moment:
+    BeginPlay, the game's selection start (its own menus use that event), and a game window opening (the selection
+    screen is one of the game's windows; a short search). EndPlay unbinds (the game instance outlives the level),
+    stops the poll and detaches."""
     g.node("selStart", "customevent", name="DB_SelectionStart", signature=GAMEINSTANCE + ":OnCharacterSelectionStart")
     g.node("selStop", "customevent", name="DB_SelectionStop", signature=GAMEINSTANCE + ":OnCharacterSelectionStop")
     events = (("Start", "selStart", "OnCharacterSelectionStart"), ("Stop", "selStop", "OnCharacterSelectionStop"))
@@ -2085,11 +2157,21 @@ def select_events(g, after, rig):
         g.node("bind" + suffix, "adddelegate", name=prop, **{"class": GAMEINSTANCE})
         g.link("gi.ReturnValue", "bind%s.self" % suffix)
         g.link(event + ".OutputDelegate", "bind%s.Delegate" % suffix)
+    g.node("winOpened", "customevent", name="DB_WindowOpened", signature=WINDOWMANAGER + ":OnFirstWindowOpened")
+    g.call("wm", GFL + ":GetWindowManager")
+    valid(g, "wmOk", "wm.ReturnValue")
+    g.node("bindOpened", "adddelegate", name="OnFirstWindowOpened", **{"class": WINDOWMANAGER})
+    g.link("wm.ReturnValue", "bindOpened.self")
+    g.link("winOpened.OutputDelegate", "bindOpened.Delegate")
     first, last = start_poll(g, "pollA", rig)
     g.call("tryNow", "TryShow")
-    g.flow(after, "brGiOk", "bindStart", "bindStop", first)
-    g.flow("brGiOk.else", first)
+    g.flow(after, "brGiOk", "bindStart", "bindStop", "brWmOk", "bindOpened", first)
+    g.flow("brGiOk.else", "brWmOk")
+    g.flow("brWmOk.else", first)
     g.flow(last, "tryNow")
+    # A game window opened: a short search.
+    first, last = start_poll(g, "pollW", rig, OPEN_WINDOW)
+    g.flow("winOpened", first)
     # Start: only the class choice (Selection) restarts the poll and tries at once; the other camera spots are
     # customization, forge, end screen, ...
     g.node("isSel", "select", index=CAMERA_LOCATION, type={"type": "bool"})
@@ -2100,10 +2182,16 @@ def select_events(g, after, rig):
     g.call("tryStart", "TryShow")
     g.flow("selStart", "brSel", first)
     g.flow(last, "tryStart")
-    # Stop: hide the tooltips; the overlay stays with the screen.
+    # Stop: hide the tooltips; the overlay stays with the screen. When no search is running, one look a moment
+    # later (SelectPoll once): a mission's screen has left the UI by then and the overlay lets go of it.
     valid(g, "stopSel", g.get("selS0", "SelectUI"))
     g.call("pause", cls(SELECT) + ":OnStop", target=ref(g.get("selS1", "SelectUI")))
-    g.flow("selStop", "brStopSel", "pause")
+    g.call("searching", KSL + ":K2_IsTimerActive", Object=ref(g.self_()), FunctionName="SelectPoll")
+    g.branch("brSearching", "searching.ReturnValue")
+    g.call("lookLater", KSL + ":K2_SetTimer", Object=ref(g.self_()), FunctionName="SelectPoll", Time=STOP_CHECK,
+           bLooping="false")
+    g.flow("selStop", "brStopSel", "pause", "brSearching")
+    g.flow("brSearching.else", "lookLater")
     g.node("end", "event", name="ReceiveEndPlay", **{"class": ACTOR})
     g.call("gi2", GFL + ":GetFSDGameInstance")
     valid(g, "gi2Ok", "gi2.ReturnValue")
@@ -2280,7 +2368,8 @@ def trees():
 def init_members():
     """InitSpacerig / InitCave. KeyArmed: B was pressed while the game had the input (the release may open the
     window). SelectUI: the class selection overlay of this level; ScreenClass, AnchorClass (loaded once,
-    ClassesTried), ScreenTmp, CanvasTmp, ZTmp: TryShow's working values; PollUntil: end of the mission poll."""
+    ClassesTried), ScreenTmp, CanvasTmp, ZTmp: TryShow's working values; PollUntil: end of the search for the
+    screen."""
     return {"variables": [t("KeyArmed", B), t("KeyArmedAt", F), obj("SelectUI", cls(SELECT)),
                           t("ScreenClass", "class", USERWIDGET), t("AnchorClass", "class", USERWIDGET),
                           t("ClassesTried", B), obj("ScreenTmp", USERWIDGET), obj("CanvasTmp", CANVAS),
@@ -2311,8 +2400,13 @@ def members():
             t("Tab", I, default="0"), obj("Columns", cls(COLUMN), array=True), obj("Chips", cls(CHIP), array=True),
             t("ChipWidth", F, default=str(float(CHIP_MAX))), t("Manual", B), t("Inited", B), t("TakeOpen", B),
             t("OpenTmp", B), t("CodeText", S), t("CodeValid", B), t("PanelWidth", I, default=str(PANEL_WIDTH)),
+            # RosterSame: what the chips were last drawn from (Rp...), and its working values (Rs...).
+            obj("RpPlayers", PS, array=True), t("RpShown", I, array=True), obj("RpClasses", CHARID, array=True),
+            t("RpNames", S, array=True), t("RpPage", I, default="-1"), obj("RsClasses", CHARID, array=True),
+            t("RsNames", S, array=True), t("RsSame", B),
         ], "functions": [
             {"name": "Refresh"}, {"name": "TimerRefresh"}, {"name": "Collect"}, {"name": "UpdateWidth"},
+            {"name": "RosterSame", "outputs": [t("Same", B)]},
             {"name": "ClassIndex", "inputs": [obj("Player", PS)], "outputs": [t("Index", I)]},
             {"name": "ShowPage"}, {"name": "UpdateHeader"}, {"name": "UpdateRoster"},
             {"name": "FitToScreen", "inputs": [t("WithRoster", B)]},
@@ -2337,6 +2431,8 @@ def members():
             t("BecTmp", B), t("WasUp", B), t("Odd", B), obj("Desc", UMG + "Widget"),
             # Tick's check of your column: the class and loadout it last showed.
             obj("OwnClass", CHARID), t("OwnLoadout", I, default="-1"),
+            # Tick: when it last ran, whether the screen was just shown, when the columns are refreshed next.
+            t("LastTick", F), t("TickShown", B), t("NextUpdate", F),
             # FitScale's inputs: the overlay's size (from Tick) and the team column count (from Refresh).
             t("ViewW", F), t("ViewH", F), t("TeamCount", I, default="0"),
             t("DescClass", "class", USERWIDGET),
@@ -2376,6 +2472,7 @@ def graphs():
                  "Collect": g_win_collect(), "UpdateWidth": g_win_update_width(),
                  "ClassIndex": g_win_class_index(), "ShowPage": g_win_show_page(),
                  "UpdateHeader": g_win_update_header(), "UpdateRoster": g_win_update_roster(),
+                 "RosterSame": g_win_roster_same(),
                  "FitToScreen": g_win_fit(),
                  "GetChip": g_win_get_chip(), "SetFilter": g_win_set_filter(), "SetTab": g_win_set_tab(),
                  "PageBy": g_win_page_by(), "Dismiss": g_win_dismiss(), "Stop": g_win_stop(),

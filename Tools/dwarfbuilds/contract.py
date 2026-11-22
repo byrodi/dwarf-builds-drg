@@ -25,7 +25,7 @@ same format (Docs/dwarfbuilds-site.md section 1; shared test vectors in Web/test
   <perks> = the equipped perks joined with ".": passive ones, then active ones, then the proficiency, each in the
             order of the save. Each is its 1-based perk ID: position of the perk's asset name (GetObjectName) in
             Tools/dwarfbuilds/perk_ids.json + 1 (frozen, append-only). Unknown perks are left out. Empty = perks not
-            known (a teammate when the host does not run the mod); the code then ends with ":". Ranks are not in it.
+            known (a teammate whose perks nobody could tell); the code then ends with ":". Ranks are not in it.
   Example (an Engineer build): DB1:E:2-21123-2:1-21322-7:1-212-0:1-1221-0:1-1213-0:4--0:1-12-0:24.27.33.23
   Readers ignore extra digits/parts and treat missing ones as 0, so a code stays readable after a game update.
   Valid = DB1, a known class and at least one part whose item index is above 0. Characters: A-Z 0-9 : - .
@@ -33,12 +33,14 @@ same format (Docs/dwarfbuilds-site.md section 1; shared test vectors in Web/test
 from dwarfbuilds.common import (CARD, CELL, CHARID, CHIP, COLUMN, CORE, DATA, GEAR, INIT_CAVE, INIT_SPACERIG, ITEMID,
                                LINEAR, OVERCLOCK, PERK, PERKASSET, PS, SHARE, SLOTBTN, TAKE, TEXTURE, TIP, UPGRADE,
                                USERWIDGET, WINDOW, WINDOWWIDGET, cls, t)
-from dwarfbuilds.common import DEFAULT_KEY, HUBMOD, HUBPAGE, KEY, MODHUB, SELECT, SETTINGS
+from dwarfbuilds.common import DEFAULT_KEY, HUBMOD, HUBPAGE, KEY, LINK, MODHUB, SELECT, SETTINGS
 
 ACTOR = "/Script/Engine.Actor"
 
 # Declaration order: a widget tree may only contain mod widgets declared before it.
-DECLARE_ORDER = [TIP, CELL, PERK, CARD, GEAR, COLUMN, CHIP, SLOTBTN, TAKE, WINDOW, SELECT, SETTINGS, DATA, SHARE,
+# Graphs are built in this order too: DB_Data calls DB_BuildShare_v2's Server_SetCode, a custom event, which exists
+# only once that asset's graphs are compiled, so LINK comes before DATA.
+DECLARE_ORDER = [TIP, CELL, PERK, CARD, GEAR, COLUMN, CHIP, SLOTBTN, TAKE, WINDOW, SELECT, SETTINGS, LINK, DATA, SHARE,
                  HUBPAGE, HUBMOD, CORE, INIT_SPACERIG, INIT_CAVE]
 
 ASSETS = {
@@ -61,6 +63,7 @@ ASSETS = {
     SETTINGS: ("blueprint", "/Script/Engine.SaveGame", "data"),
     DATA: ("blueprint", ACTOR, "data"),
     SHARE: ("blueprint", ACTOR, "data"),
+    LINK: ("blueprint", ACTOR, "data"),
     # Mod Hub (optional mod): its page sets the hotkey. Both implement Mod Hub interfaces, so nothing else may
     # reference them: DB_Mod loads DB_Hub by path and only when Mod Hub's IHubMod exists.
     HUBPAGE: ("widget", USERWIDGET, "hub"),
@@ -84,12 +87,18 @@ PUBLIC = {
     DATA: {
         # Hexagon textures (common.TEX_HEX_BG / TEX_HEX_OUTLINE), loaded asynchronously when DB_Data spawns.
         # None until loaded (or if they cannot be loaded): widgets then draw plain shapes.
-        "variables": [obj("HexBg", TEXTURE), obj("HexOutline", TEXTURE)],
+        # PerksOf_Share: the host's DB_PerkShare_v1 once a client found it (None on the host and before that).
+        # Revision: counts the builds ApplyCode wrote into the save. A column compares both with what it last drew.
+        "variables": [obj("HexBg", TEXTURE), obj("HexOutline", TEXTURE), obj("PerksOf_Share", cls(SHARE)),
+                      t("Revision", I)],
         "functions": [
+            # The local player's FSDPlayerState, or None.
+            {"name": "LocalPS", "outputs": [obj("PS", PS)]},
             # Players in lobby order (AFSDGameState.GetNetworkSortedPlayerArray).
             {"name": "GetPlayers", "outputs": [obj("Players", PS, array=True)]},
             # Build code of a player; "" when the player has no class yet. Local player: from the save
-            # (GetCurrentLoadout); others: from the replicated SaveGameStateComponent.ItemUpgradeSelections.
+            # (GetCurrentLoadout), worked out again only when the save's loadout or perks changed; others: their
+            # DB_BuildShare_v2 (LinkFor), else the replicated SaveGameStateComponent.ItemUpgradeSelections.
             {"name": "CodeOf", "inputs": [obj("Player", PS)], "outputs": [t("Code", S)]},
             # The local player's current build code ("" if none).
             {"name": "LocalCode", "outputs": [t("Code", S)]},
@@ -103,17 +112,25 @@ PUBLIC = {
              "outputs": [t("Sub", S), t("Color", "struct", LINEAR), obj("Icon", TEXTURE)]},
             # Equipped perks of a player: passive ones, then active ones, then the proficiency. State: 0 = known; 1 = not available (the host does not
             # run this mod: no share actor 10 s after DB_Data spawned); 2 = not received yet (share actor not there
-            # yet in the first 10 s, or no data for this player/class yet).
+            # yet in the first 10 s, no data for this player/class yet, or the player's link is still young and
+            # may get their build); 3 = not available: the game gave this player's perks to nobody who could pass
+            # them on (no perks known is "unknown", not "no perks").
             {"name": "PerksOf", "inputs": [obj("Player", PS)],
              "outputs": [obj("Perks", PERKASSET, array=True), t("Ranks", I, array=True), t("State", I)]},
+            # Another player's DB_BuildShare_v2 when it holds their build: a link with a code (on the host only a
+            # code the player's own mod sent; a host of another build may fill links itself). None for the local
+            # player (the save is the source), for an empty link (a player without the mod) and when there is none.
+            {"name": "LinkFor", "inputs": [obj("Player", PS)], "outputs": [obj("Link", cls(LINK))]},
             # Class of a code; Valid = false for anything that is not a DB1 code of a known class with at least one
             # part whose item index is above 0.
             {"name": "ClassOfCode", "inputs": [t("Code", S)], "outputs": [obj("Class", CHARID), t("Valid", B)]},
-            # One code slot (0..6, common.SLOTS). Choices: one entry per tier of the item, 0 = none, 1..3 = option.
+            # One code slot (0..6, common.SLOTS). Choices: one entry per tier of the item, 0 = none, 1..3 = option,
+            # -1 = an option this game does not have. UnknownOc: the code names an overclock this game does not
+            # have (Overclock is then None). Both show as nothing chosen; TAKE BUILD keeps the slot's own.
             # Digits = the tier digits with spaces ("2 1 3 2 1"). Found = false when the slot is unknown (item 0).
             {"name": "DecodeSlot", "inputs": [t("Code", S), t("Slot", I)],
              "outputs": [obj("Item", ITEMID), t("Choices", I, array=True), obj("Overclock", OVERCLOCK), t("Digits", S),
-                         t("Found", B)]},
+                         t("Found", B), t("UnknownOc", B)]},
             # Perks of a code (its perks part), in code order. Ranks: the local player's rank of each perk, or its
             # highest rank when not owned (for the tooltips). Found = at least one perk of the code is known here.
             {"name": "PerksOfCode", "inputs": [t("Code", S)],
@@ -191,6 +208,20 @@ PUBLIC = {
              "outputs": [obj("Perks", PERKASSET, array=True), t("Ranks", I, array=True), t("Found", B)]},
         ],
     },
+    LINK: {
+        # FROZEN replicated layout, in this order (see common.LINK). Player: whose build (RepNotify: a client may get
+        # the link before the player state). Code: a DB1 build code, empty until the player's mod sends one; its
+        # perks part counts only when PerksKnown. FromPlayer: the player's own mod sent it (Server_SetCode, a reliable
+        # server RPC in the event graph: data.g_link_events). This mod sets both with the code; they stay for hosts
+        # of other builds that fill links from what the host sees.
+        "variables": [
+            obj("Player", PS, replicated=True, repnotify=True),
+            t("Code", S, replicated=True),
+            t("PerksKnown", B, replicated=True),
+            t("FromPlayer", B, replicated=True),
+        ],
+        "functions": [],
+    },
     TIP: {"variables": [], "functions": [
         {"name": "Set", "inputs": [t("Title", TX), t("Category", TX), t("Body", TX), t("Accent", "struct", LINEAR),
                                    obj("Icon", TEXTURE)]},
@@ -206,8 +237,9 @@ PUBLIC = {
         # Perk None = empty slot.
         {"name": "Set", "inputs": [obj("Perk", PERKASSET), t("Rank", I)]}]},
     CARD: {"variables": [obj("Data", cls(DATA))], "functions": [
+        # UnknownOc (DecodeSlot): the overclock tile says UNKNOWN OVERCLOCK instead of NO OVERCLOCK.
         {"name": "Show", "inputs": [obj("Item", ITEMID), t("Choices", I, array=True), obj("Overclock", OVERCLOCK),
-                                    t("Digits", S)]}]},
+                                    t("Digits", S), t("UnknownOc", B)]}]},
     GEAR: {"variables": [obj("Data", cls(DATA))], "functions": [
         {"name": "Show", "inputs": [t("Label", S), obj("Item", ITEMID), t("Choices", I, array=True)]}]},
     COLUMN: {"variables": [obj("Window", cls(WINDOW)), obj("Data", cls(DATA)), t("Code", S)], "functions": [

@@ -14,10 +14,12 @@ Tooltips are made on the first hover only: one DB_Tip per widget, refilled when 
 import math
 
 from dwarfbuilds.common import press_feedback  # noqa: E402
-from dwarfbuilds.common import (BLACK_TEXT, BODY, CARBON, CARD, CELL, COLUMN, DARK, DATA, FRONTEND, GEAR,
-                               GEAR_LABELS, ITEMID, KARR, KML, KSL, KSTR, KTXT, LIGHT_TEXT, LINEAR, ORANGE,
-                               ORANGE_LIGHT, OVERCLOCK, PERK, PERK_ACTIVE, PERK_PASSIVE, PERK_PROF, PERKASSET, RIFT,
-                               SHOWN_SLOTS, TEXTURE, TIP,
+from dwarfbuilds.common import LINK as BUILD_LINK  # noqa: E402  (LINK is a colour here)
+from dwarfbuilds.common import (ACTOR, BLACK_TEXT, BODY, CARBON, CARD, CELL, CHARID, COLUMN, DARK, DATA, FRONTEND,
+                               GEAR, GEAR_LABELS, GFL, GS, ITEMID, KARR, KML, KSL, KSTR, KTXT, LIGHT_TEXT, LINEAR,
+                               ORANGE, ORANGE_LIGHT, OVERCLOCK, PERK, PERK_ACTIVE, PERK_PASSIVE, PERK_PROF,
+                               PERKASSET, PERKITEM, PS, RIFT, SAVEGAME, SELECTION, SGSC, SHARE, SHOWN_SLOTS, TEXTURE,
+                               TIP,
                                UMG, UPGRADE, USERWIDGET, WBL, WHITE, WINDOW, Graph, border, box, cls, colour,
                                game_button, image, margin, oslot, ref, slate, t, text, vslot, hslot, w)
 
@@ -29,6 +31,8 @@ BORDER = UMG + "Border:"
 VIS = UMG + "ESlateVisibility"
 SLATECOLOR = "/Script/SlateCore.SlateColor"
 CATEGORY = FSD + "ItemUpgradeCategory"
+PROGRESS = FSD + "CharacterProgress"
+PLAYERSTATE = "/Script/Engine.PlayerState"
 
 
 def srgb(hexcode, a=1.0):
@@ -102,6 +106,11 @@ TIP_W, TIP_TILE, TIP_KEY = 480, 64, 22
 
 TEXT_NOT_SHARED = "Not available. The host does not run this mod."
 TEXT_WAITING = "Waiting for the host..."
+TEXT_NO_PERKS = "Not available. The game does not share this player's perks."
+# DB_Column.SameAsLast: a column is drawn again at least every FRESH_FOR seconds, and when ShowPlayer was not called
+# for SEEN_GAP seconds (the window or the overlay was closed meanwhile: callers refresh once a second while shown).
+FRESH_FOR = "10.0"
+SEEN_GAP = "1.5"
 TEXT_CODE_NO_PERKS = "No perks in this code."
 TEXT_COPY, TEXT_COPIED, TEXT_TAKE = "COPY CODE", "COPIED", "TAKE BUILD"
 COPIED_SECONDS = "1.5"
@@ -728,6 +737,7 @@ def card_members():
         t("LinkList", "object", UMG + "Image", array=True),   # tier row lines, the same index as CellList
         t("TierOpts", "object", UPGRADE, array=True),
         t("CardItem", "object", ITEMID), t("CardOc", "object", OVERCLOCK),
+        t("CardOcUnknown", "bool"),   # the code names an overclock this game does not have (Show's UnknownOc)
         t("OcTitle", "text"), t("OcCategory", "text"), t("OcBody", "text"), t("OcIconTex", "object", TEXTURE),
         t("OcColor", "struct", LINEAR), t("OcFrameTex", "object", TEXTURE),
         t("OcShown", "object", OVERCLOCK),   # the overclock last drawn
@@ -762,7 +772,8 @@ def g_card_show():
     drop_item = [g.tooltip(g.v("NameBtn")), g.put("ItemTipFor")]
     old_oc = g.br(g.and_(g.valid(g.v("OcTipFor")), g.obj_ne(g.v("OcTipFor"), oc)))
     drop_oc = [g.tooltip(g.v("OcBtn")), g.put("OcTipFor")]
-    head = [g.f("EnsureCells"), g.put("CardItem", item), g.put("CardOc", oc), old_item]
+    head = [g.f("EnsureCells"), g.put("CardItem", item), g.put("CardOc", oc),
+            g.put("CardOcUnknown", "@entry.UnknownOc"), old_item]
     g.flow("entry", *head, *drop_item, old_oc, *drop_oc)
     g.flow(old_item + ".else", old_oc)
 
@@ -815,7 +826,8 @@ def g_card_overclock():
              g.set_image("OcIcon", g.v("OcIconTex")),
              g.tint("OcIcon", g.pick_colour(framed, colour(WHITE), colour(INK))),
              g.set_vis(g.v("OcIcon"), g.vis_if(g.valid(g.v("OcIconTex")), "HitTestInvisible", "Collapsed"))]
-    none = [g.set_text("OcName", "NO OVERCLOCK"), g.set_text_colour("OcName", DIM), g.set_text("OcType", ""),
+    name = g.as_text(g.pick_string(g.v("CardOcUnknown"), "UNKNOWN OVERCLOCK", "NO OVERCLOCK"))
+    none = [g.set_text("OcName", name), g.set_text_colour("OcName", DIM), g.set_text("OcType", ""),
             g.set_vis(g.v("OcTypeBox"), "Collapsed"), g.set_image("OcFrame", None), g.tint("OcFrame", EMPTY_TILE),
             g.set_vis(g.v("OcIcon"), "Collapsed"), g.put("OcShown"), g.put("OcFrameTex")]
     g.flow("entry", same)
@@ -1075,7 +1087,17 @@ def column_members():
         t("Tiles2", "object", cls(PERK), array=True), t("N0", "int"), t("N1", "int"), t("N2", "int"),
         t("Compact", "bool", default="false"),   # SetCompact(On)
         t("HasButtons", "bool"),   # the last Show was ShowPlayer (buttons), not ShowCode
+        # SameAsLast: what the column last drew a player from (Fp...), and its working values.
+        t("FpPlayer", "object", PS), t("FpClass", "object", CHARID), t("FpName", "string"), t("FpLevel", "int"),
+        t("FpHost", "bool"), t("FpHex", "bool"), t("FpEarly", "bool"), t("FpLoadout", "int", default="-1"),
+        t("FpRev", "int"), t("FpLink", "string"), t("FpAt", "float"), t("FpSeen", "float"),
+        t("FpSels", "struct", SELECTION, array=True), t("FpPerks", "struct", PERKITEM, array=True),
+        t("FpStats", "struct", PROGRESS, array=True), t("FpShareIds", "int", array=True),
+        t("FpSharePerks", "object", PERKASSET, array=True), t("FpShareRanks", "int", array=True),
+        t("FpShareClasses", "object", CHARID, array=True), t("FpShareCounts", "int", array=True), t("FpYou", "bool"),
+        t("SameTmp", "bool"), t("LoadTmp", "int"), t("LinkTmp", "string"),
     ], "functions": [
+        {"name": "SameAsLast", "inputs": [t("Player", "object", PS)], "outputs": [t("Same", "bool")]},
         {"name": "PushData"},
         {"name": "ApplyButtons"},
         {"name": "ShowHeader", "inputs": [t("HeadName", "string"), t("HeadSub", "string"), t("HeadColor", "struct", LINEAR),
@@ -1125,7 +1147,7 @@ def g_column_build():
         item = g.pick_obj(out("Found"), out("Item"), ITEMID)
         if slot < 2:
             show = g.f(cls(CARD) + ":Show", target=g.v("Card%d" % (slot + 1)), Item=item, Choices=out("Choices"),
-                       Overclock=out("Overclock"))
+                       Overclock=out("Overclock"), UnknownOc=out("UnknownOc"))
         else:
             show = g.f(cls(GEAR) + ":Show", target=g.v("Gear%d" % (slot - 1)), Label=GEAR_LABELS[slot - 2], Item=item,
                        Choices=out("Choices"))
@@ -1188,10 +1210,112 @@ def g_column_note():
     return g.data()
 
 
+def g_column_same():
+    """Whether nothing ShowPlayer shows of Player can have changed since the column last drew a player: the same
+    player, class, name, level, host flag, selected loadout and Data.Revision (the local player's save), the same
+    replicated selections, perks and stats, the same host perk table (DB_PerkShare_v1) and link (DB_BuildShare_v2),
+    the hexagon textures loaded as before, the same answer to "is this you", and Data as old as before (10 s after
+    it spawned "waiting for the host" becomes "not available"; until then a client's column without the host's
+    table is not "same": the table may arrive). Also false every FRESH_FOR seconds, for what no input here covers, and after a
+    SEEN_GAP without a call. Records the inputs for the next call. Data and Player must be valid.
+    ShowPlayer runs once a second per column; this is its cheap way out: the build code, header and perks are worked
+    out only when one of their sources changed."""
+    g = G()
+    player, data = "@entry.Player", g.v("Data")
+
+    def both(*conds):
+        acc = conds[0]
+        for cond in conds[1:]:
+            acc = g.and_(acc, cond)
+        return acc
+
+    def still(*conds):
+        return g.put("SameTmp", both(g.v("SameTmp"), *conds))
+
+    def identical(a, b):
+        return g.rv(KARR + ":Array_Identical", ArrayA=a, ArrayB=b)
+
+    def bool_eq(a, b):
+        return g.rv(KML + ":EqualEqual_BoolBool", A=a, B=b)
+
+    def within(stamp, seconds):
+        return g.rv(KML + ":Less_FloatFloat", A=g.rv(KML + ":Subtract_FloatFloat", A=now, B=g.v(stamp)), B=seconds)
+
+    klass = g.rv(PS + ":GetSelectedCharacterID", target=player)
+    name = g.rv(PLAYERSTATE + ":GetPlayerName", target=player)
+    level = g.rv(PS + ":GetSelectedCharacterLevel", target=player)
+    host = g.v("bIsServer", PS, player)
+    hexes = g.valid(g.v("HexBg", cls(DATA), data))
+    early = g.rv(KML + ":Less_FloatFloat", A=g.rv(ACTOR + ":GetGameTimeSinceCreation", target=data), B="10.0")
+    rev = g.v("Revision", cls(DATA), data)
+    now = g.rv(GS + ":GetRealTimeSeconds")
+    me = g.f(cls(DATA) + ":LocalPS", target=data)
+    you = g.obj_eq(player, "@%s.PS" % me)
+    # The selected loadout of the class in the local save (what the local player's column shows).
+    load0 = g.put("LoadTmp", "-1")
+    save = g.rv(GFL + ":GetFSDSaveGame")
+    has_save = g.br(g.and_(g.valid(save), g.valid(klass)))
+    load1 = g.put("LoadTmp", g.rv(SAVEGAME + ":GetSelectedLoadoutIndex", target=save, characterID=klass))
+    first = g.put("SameTmp", both(
+        g.obj_eq(player, g.v("FpPlayer")), g.obj_eq(klass, g.v("FpClass")), g.str_eq(name, g.v("FpName")),
+        g.eq(level, g.v("FpLevel")), bool_eq(host, g.v("FpHost")), bool_eq(hexes, g.v("FpHex")),
+        bool_eq(early, g.v("FpEarly")), bool_eq(you, g.v("FpYou")), g.eq(g.v("LoadTmp"), g.v("FpLoadout")),
+        g.eq(rev, g.v("FpRev")),
+        within("FpAt", FRESH_FOR), within("FpSeen", SEEN_GAP)))
+    seen = g.put("FpSeen", now)
+    # The player's replicated save state.
+    comp = g.v("SaveGameStateComponent", PS, player)
+    has_comp = g.br(g.valid(comp))
+    sels, perks, stats = [g.v(prop, SGSC, comp) for prop in ("ItemUpgradeSelections", "EquippedPerks", "CharacterStats")]
+    comp_same = still(identical(sels, g.v("FpSels")), identical(perks, g.v("FpPerks")),
+                      identical(stats, g.v("FpStats")))
+    comp_keep = [g.put("FpSels", sels), g.put("FpPerks", perks), g.put("FpStats", stats)]
+    none_same = still(g.eq(g.length(g.v("FpSels")), "0"), g.eq(g.length(g.v("FpPerks")), "0"))
+    none_keep = [g.f(KARR + ":Array_Clear", TargetArray=g.v(var)) for var in ("FpSels", "FpPerks", "FpStats")]
+    # The host's 0.1.0 perk table, once this client found it.
+    share = g.v("PerksOf_Share", cls(DATA), data)
+    has_share = g.br(g.valid(share))
+    pairs = (("Ids", "FpShareIds"), ("Classes", "FpShareClasses"), ("Perks", "FpSharePerks"),
+             ("Ranks", "FpShareRanks"), ("Counts", "FpShareCounts"))
+    # No table yet: a client may still get it while Data is young (the host never has one).
+    no_share = still(g.rv(KML + ":BooleanOR", A=g.rv(KSL + ":IsServer"), B=g.not_(early)))
+    share_same = still(*[identical(g.v(prop, cls(SHARE), share), g.v(var)) for prop, var in pairs])
+    share_keep = [g.put(var, g.v(prop, cls(SHARE), share)) for prop, var in pairs]
+    # The player's link: its code and whether its perks count.
+    link = g.f(cls(DATA) + ":LinkFor", target=data, Player=player)
+    found = "@%s.Link" % link
+    sig0 = g.put("LinkTmp", "")
+    has_link = g.br(g.valid(found))
+    sig1 = g.put("LinkTmp", g.concat(g.v("Code", cls(BUILD_LINK), found),
+                                     g.pick_string(g.v("PerksKnown", cls(BUILD_LINK), found), "+", "-")))
+    link_same = still(g.str_eq(g.v("LinkTmp"), g.v("FpLink")))
+    link_keep = g.put("FpLink", g.v("LinkTmp"))
+    same = g.br(g.v("SameTmp"))
+    store = [g.put("FpPlayer", player), g.put("FpClass", klass), g.put("FpName", name), g.put("FpLevel", level),
+             g.put("FpHost", host), g.put("FpHex", hexes), g.put("FpEarly", early), g.put("FpYou", you),
+             g.put("FpLoadout", g.v("LoadTmp")), g.put("FpRev", rev), g.put("FpAt", now)]
+    g.flow("entry", me, load0, has_save, load1, first)
+    g.flow(has_save + ".else", first)
+    g.flow(first, seen, has_comp, comp_same, *comp_keep, has_share)
+    g.flow(has_comp + ".else", none_same, *none_keep, has_share)
+    g.flow(has_share, share_same, *share_keep, link)
+    g.flow(has_share + ".else", no_share, link)
+    g.flow(link, sig0, has_link, sig1, link_same)
+    g.flow(has_link + ".else", link_same)
+    g.flow(link_same, link_keep, same, "result")
+    g.flow(same + ".else", *store, "result")
+    g.pins("result", {"Same": g.v("SameTmp")})
+    return g.data()
+
+
 def g_column_show_player():
+    """Nothing when SameAsLast: the sources of what the column shows did not change. Else the code, header and
+    perks are worked out and drawn when their signature differs from the last drawn one."""
     g = G()
     player, data = "@entry.Player", g.v("Data")
     ok = g.br(g.and_(g.valid(data), g.valid(player)))
+    unchanged = g.f("SameAsLast", Player=player)
+    fresh = g.br("@%s.Same" % unchanged)
     code = g.f(cls(DATA) + ":CodeOf", target=g.v("Data"), Player=player)
     head = g.f(cls(DATA) + ":HeaderOf", target=g.v("Data"), Player=player)
     perks = g.f(cls(DATA) + ":PerksOf", target=g.v("Data"), Player=player)
@@ -1208,7 +1332,8 @@ def g_column_show_player():
     add = g.put("SigWork", g.concat(g.v("SigWork"), "|", g.rv(KSL + ":GetObjectName", Object="@" + perk), ":",
                                     g.int_str(g.at(g.v("ColRanks"), "@sigPerks.Array Index"))))
     same = g.br(g.str_eq(g.v("SigWork"), g.v("LastSig")))
-    g.flow("entry", ok, code, head, perks, *keep, start, "sigPerks.Exec")
+    g.flow("entry", ok, unchanged, fresh)
+    g.flow(fresh + ".else", code, head, perks, *keep, start, "sigPerks.Exec")
     g.flow("sigPerks.LoopBody", add)
     g.flow("sigPerks.Completed", same)
     g.flow(ok + ".else", g.f("Clear"))
@@ -1223,7 +1348,8 @@ def g_column_show_player():
     state = "@%s.State" % perks
     known = g.br(g.eq(state, "0"))
     tiles = g.f("ShowPerks")
-    note = g.f("ShowNote", Note=g.pick_string(g.eq(state, "1"), TEXT_NOT_SHARED, TEXT_WAITING))
+    note = g.f("ShowNote", Note=g.pick_string(g.eq(state, "1"), TEXT_NOT_SHARED,
+                                              g.pick_string(g.eq(state, "3"), TEXT_NO_PERKS, TEXT_WAITING)))
     # Buttons: the local player can only copy; take and copy need a code.
     not_you = g.not_(hd("IsYou"))
     buttons = [g.set_vis(g.v("TakeBtnSize"), g.vis_if(not_you, "SelfHitTestInvisible", "Collapsed")),
@@ -1247,8 +1373,8 @@ def g_column_show_code():
     head = g.f(cls(DATA) + ":HeaderOfCode", target=g.v("Data"), Code="@entry.NewCode")
     hd = lambda pin: "@%s.%s" % (head, pin)  # noqa: E731
     perks = g.f(cls(DATA) + ":PerksOfCode", target=g.v("Data"), Code="@entry.NewCode")
-    steps = [g.put("LastSig", sig), g.put("Code", "@entry.NewCode"), g.put("TakeTitle", "@entry.Title"),
-             g.f("PushData"), head,
+    steps = [g.put("LastSig", sig), g.put("FpPlayer"), g.put("Code", "@entry.NewCode"),
+             g.put("TakeTitle", "@entry.Title"), g.f("PushData"), head,
              g.f("ShowHeader", HeadName="@entry.Title", HeadSub=hd("Sub"), HeadColor=hd("Color"), HeadIcon=hd("Icon"),
                  HeadYou="false", HeadHost="false"),
              g.f("ShowBuild", BuildCode="@entry.NewCode"),
@@ -1283,8 +1409,10 @@ def g_column_set_compact():
 
 
 def g_column_clear():
+    """FpPlayer goes too: the next ShowPlayer draws, whoever it shows (SameAsLast)."""
     g = G()
-    g.flow("entry", g.set_vis(g.v("Body"), "Hidden"), g.put("LastSig", ""), g.put("Code", ""), g.put("TakeTitle", ""))
+    g.flow("entry", g.set_vis(g.v("Body"), "Hidden"), g.put("LastSig", ""), g.put("FpPlayer"), g.put("Code", ""),
+           g.put("TakeTitle", ""))
     return g.data()
 
 
@@ -1334,7 +1462,8 @@ def graphs():
                "ShowGrid": g_card_grid(), "EventGraph": g_card_events()},
         GEAR: {"Show": g_gear_show(), "EventGraph": g_gear_events()},
         COLUMN: {"PushData": g_column_push_data(), "ShowHeader": g_column_header(), "ShowBuild": g_column_build(),
-                 "ShowPerks": g_column_perks(), "ShowNote": g_column_note(), "ShowPlayer": g_column_show_player(),
+                 "ShowPerks": g_column_perks(), "ShowNote": g_column_note(), "SameAsLast": g_column_same(),
+                 "ShowPlayer": g_column_show_player(),
                  "ShowCode": g_column_show_code(), "Clear": g_column_clear(), "CopyReset": g_column_copy_reset(),
                  "ApplyButtons": g_column_apply_buttons(), "SetCompact": g_column_set_compact(),
                  "EventGraph": g_column_events()},
