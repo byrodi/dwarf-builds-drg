@@ -2,6 +2,7 @@
 
 [![Latest release](https://img.shields.io/github/v/release/byrodi/dwarf-builds-drg)](https://github.com/byrodi/dwarf-builds-drg/releases/latest)
 [![License](https://img.shields.io/github/license/byrodi/dwarf-builds-drg?cacheSeconds=3600)](LICENSE)
+[![mod.io](https://img.shields.io/badge/mod.io-Dwarf%20Builds-07c1d8)](https://mod.io/g/drg/m/dwarf-builds)
 
 Deep Rock Galactic mod: see your whole team's builds in game and share them as build codes.
 
@@ -44,9 +45,9 @@ in the Steam overlay.
 
 ## Installation
 
-Download `dwarf-builds-0.1.0.zip` from the [latest release](https://github.com/byrodi/dwarf-builds-drg/releases/latest)
-and add it to [mint](https://github.com/trumank/mint) as a local mod, then install the profile. Or build it from
-source (below).
+Subscribe on [mod.io](https://mod.io/g/drg/m/dwarf-builds), or download `dwarf-builds-0.1.0.zip` from the
+[latest release](https://github.com/byrodi/dwarf-builds-drg/releases/latest) and add it to
+[mint](https://github.com/trumank/mint) as a local mod, then install the profile. Or build it from source (below).
 
 ## Usage
 
