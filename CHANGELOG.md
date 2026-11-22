@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 ### Added
 
 - Every player's build and perks reach every client when the host runs this version: each player's mod sends its
@@ -48,5 +50,6 @@ version takes from their rewrite of the mod.
 - Mod Hub page to change the key that opens the window.
 - Works on the release game and on the experimental branch.
 
-[unreleased]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/byrodi/dwarf-builds-drg/releases/tag/v0.1.0
