@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A build is sent when it changes (the game's own events), not on a timer, and is worked out again only when the
   loadout or perks in the save changed.
 - The team window works out a column and the roster strip again only when what they show changed.
-- On the Space Rig the check for the class selection screen slows down after the first minute.
+- No background timers: the mod looks for the class selection screen only for a short while after the level starts,
+  a class selection starts or a game window opens; the overlay refreshes itself only while it is on screen; the
+  host keeps the 0.1.0 perk table up only while a player without this version is in the lobby. The only timer left
+  runs once a second while the Dwarf Builds window is open.
 
 ### Fixed
 

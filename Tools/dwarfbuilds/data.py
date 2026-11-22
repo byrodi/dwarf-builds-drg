@@ -1,27 +1,30 @@
 """Data module of Dwarf Builds: DB_Data, DB_Settings, Net/DB_PerkShare_v1 and Net/DB_BuildShare_v2.
 
-DB_Data: all data logic. DB_Mod spawns it once per world; widgets call its functions. No Tick. It shares the local
-player's build when it changes (game events, see DB_BuildShare_v2 below); one 10 s timer (ShareCheck) is the safety
-net behind those events and works nothing out again while its inputs are the same.
+DB_Data: all data logic. DB_Mod spawns it once per world; widgets call its functions. No Tick and no recurring
+timer: it shares the local player's build when it changes (game events, see DB_BuildShare_v2 below).
 BeginPlay loads the mod's settings (DB_Settings, save slot SAVE_SLOT) and starts async loads of the hexagon and
 overclock frame textures (no hitch). It also keeps the list of tooltips (RegisterTip) for the "more info" toggle
 and HideTips.
 DB_Settings: the mod's SaveGame. Only its public MoreInfo and OpenKey (contract); nothing is added here.
 DB_PerkShare_v1: replicated perk table. Spawned on the server only; every 3 s it collects the equipped perks of
-all players, so clients can show them (the game replicates no perks to clients). Solo: no work. Kept exactly as
-0.1.0 shipped it, for clients on 0.1.0.
+all players, so clients can show them (the game replicates no perks to clients). Its replicated layout is exactly
+as 0.1.0 shipped it, for clients on 0.1.0. The timer runs only while some other player has sent no build
+(DB_Data.HostSync starts and stops it): in a lobby where everyone runs this version nobody reads the table.
 DB_BuildShare_v2: one replicated actor per player ("link"), spawned by the host's DB_Data (HostSync) and owned by
 that player's controller. The player's own mod sends its full build code through it (Server_SetCode) once, and
 again only when the build changes (SendOwn); the host replicates them all. So every client gets the build and
 perks of every player who runs the mod, which the game alone does not give it. A player without the mod has an
 empty link: readers then use the game's own replicated data and the 0.1.0 perk table, as before. A machine without
 the class (0.1.0, or no mod) drops the actor's channel and plays on. Solo: none are made.
-Nothing here runs on a schedule except ShareCheck. What calls what:
-  SendOwn  <- the local player's own link arrived (LinkChanged), the game's events for a changed loadout, perks or
-              class, the last game window closed (every loadout change is made in one), the class selection
-              ended, ApplyCode, ShareCheck. The code is worked out again only when the save's loadout or perks
-              differ from the last time (SaveCode and CodeOf remember their inputs).
-  HostSync <- a player joined or left (the host), ShareCheck.
+Nothing here runs on a schedule. HostSync (the host: links and the 0.1.0 table's timer; everyone: SendOwn) runs
+  - at BeginPlay and when a link arrives or gets its player's code (LinkChanged);
+  - a moment after one of the game's events (share_events): a player joined or left, the local player's class
+    changed, the class selection ended, the last game window closed (loadouts and perks are only changed in the
+    game's windows: MENU_Loadout, MENU_UpgradeScreen);
+  - when DB_Select sees the local player's class or loadout change on the class selection screen, and after
+    ApplyCode.
+The game's own Blueprints use those events (its team list, lobby and HUD), so they are known to fire. SendOwn works the code out again only when
+the save's loadout or perks differ from the last time (SaveCode and CodeOf remember their inputs).
 
 BPForge has no local variables: each function keeps its temporaries in private member variables named
 <Function>_<Name>. Pure nodes run again at every use (also inside loops), so arrays that loops read are stored in a
@@ -58,8 +61,12 @@ SHARE_C = cls(SHARE)
 LINK_C = cls(LINK)
 DATA_C = cls(DATA)
 GAMEINSTANCE = FSD + "FSDGameInstance"
-SHARE_SECONDS = "10.0"  # ShareCheck: the safety net behind the events
-EVENT_DELAY = "0.3"     # from a game event to SendOwn / HostSync (share_events)
+EVENT_DELAY = "0.3"     # from a game event to HostSync (share_events)
+HOOK_RETRY = "0.5"      # ShareCheck again while a source of events is not there yet,
+HOOK_TRIES = "40"       # this many times at most (a mission may have no window manager at all)
+OWNER_RETRY = "1.0"     # SendOwn again while this client's link does not name its owner yet,
+OWNER_TRIES = "20"      # this many times at most
+LEGACY_SECONDS = "3.0"  # DB_PerkShare_v1.Collect, while HostSync keeps its timer on
 LINK_YOUNG = "6.0"      # a link this young may still get its player's code: "waiting", not "not available"
 CODE_MAX = "600"        # Server_SetCode ignores anything longer (a build code is under 100 characters)
 CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-."   # every character of a build code (contract)
@@ -1786,35 +1793,33 @@ TEXTURE_LOADS = [("HexBg", TEX_HEX_BG), ("HexOutline", TEX_HEX_OUTLINE)] + \
 
 
 def share_events(g, after):
-    """The sharing part of DB_Data's event graph. After `after` (BeginPlay) and on every ShareCheck (a custom event
-    run by the SHARE_SECONDS timer): the world's links again (ShareScan), the game's events bound (binding again
-    is harmless: the engine keeps one binding per event), then HostSync on the host or SendOwn on a client.
-    The events: for the local player a changed loadout or perks (SaveGameStateComponent), a changed class
-    (PlayerState), the end of the class selection (game instance) and the last game window closing (window
-    manager: the equipment and perk terminals are windows) run SendOwn; a player joining or leaving (game state)
-    runs HostSync. The stubs do not say on which machine and when each of them fires, so none is relied on alone:
-    several cover the same change and ShareCheck covers them all. An event only starts a one-shot timer
-    (EVENT_DELAY): the game may fire it in the middle of one of this mod's own functions (ApplyCode writes the
-    loadout), and SendOwn run right there would overwrite that function's working variables (BPForge has no
-    locals). The timer also folds a burst of events into one call. EndPlay unbinds from the game instance, which
-    outlives the level. Needs the "me" self node of the graph."""
+    """The sharing part of DB_Data's event graph. After `after` (BeginPlay): the world's links (ShareScan), the
+    game's events bound, HostSync. Each event starts a one-shot timer to HostSync (EVENT_DELAY): the game may fire
+    it in the middle of one of this mod's own functions (ApplyCode writes the loadout), and work done right there
+    would overwrite that function's working variables (BPForge has no locals). The timer also folds a burst of
+    events into one call.
+    The events: a player joined or left (game state), the local player's class changed (player state), the class
+    selection ended (game instance), the last game window closed (window manager). The save component's events
+    for a changed loadout and changed perks are not bound: no Blueprint of the game uses them, so when and how
+    often they fire is unknown, and every such change is made in a game window or on the class selection screen.
+    The sources of the events (window manager, game state, the local player state) may not exist yet at
+    BeginPlay: ShareCheck, a custom event, binds again (binding twice is harmless: the engine keeps
+    one binding per event) and is run every HOOK_RETRY until all are bound or HOOK_TRIES are used, and once more
+    when the local player's link arrives (LinkChanged). EndPlay unbinds from the game instance, which outlives
+    the level. Needs the "me" self node of the graph."""
     g.node("check", "customevent", name="ShareCheck")
     g.do("scan", "ShareScan")
-    g.flow(after, "scan")
-    g.flow("check", "scan")
-    handlers = [  # (node, owner of the delegate, delegate, what runs)
-        ("evSelStop", GAMEINSTANCE, "OnCharacterSelectionStop", "SendOwn"),
-        ("evWindows", WINDOWMANAGER, "OnLastWindowClosed", "SendOwn"),
-        ("evLoadout", SGSC, "OnLoadoutChangedEvent", "SendOwn"),
-        ("evPerks", SGSC, "OnEquippedPerksChanged", "SendOwn"),
-        ("evClass", PS, "OnSelectedCharacterChanged", "SendOwn"),
-        ("evJoined", GAMESTATE, "OnPlayerJoined", "HostSync"),
-        ("evLeft", GAMESTATE, "OnPlayerLeave", "HostSync"),
+    handlers = [  # (node, owner of the delegate, delegate)
+        ("evSelStop", GAMEINSTANCE, "OnCharacterSelectionStop"),
+        ("evWindows", WINDOWMANAGER, "OnLastWindowClosed"),
+        ("evClass", PS, "OnSelectedCharacterChanged"),
+        ("evJoined", GAMESTATE, "OnPlayerJoined"),
+        ("evLeft", GAMESTATE, "OnPlayerLeave"),
     ]
     owners = {}
-    for event, owner, prop, runs in handlers:
+    for event, owner, prop in handlers:
         g.node(event, "customevent", name="DB_" + prop, signature="%s:%s" % (owner, prop))
-        g.do(event + "Run", KSL + ":K2_SetTimer", Object="@me.self", FunctionName=runs, Time=EVENT_DELAY,
+        g.do(event + "Run", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="HostSync", Time=EVENT_DELAY,
              bLooping="false")
         g.flow(event, event + "Run")
         owners[event] = (owner, prop)
@@ -1827,31 +1832,35 @@ def share_events(g, after):
         g.link(event + ".OutputDelegate", nid + ".Delegate")
         return nid
 
+    def missing(nid):
+        return g.put(nid, "HookMissing", "true")
+
     instance = g.val(GFL + ":GetFSDGameInstance")
     windows = g.val(GFL + ":GetWindowManager")
     state = g.val(GFL + ":GetFSDGameState")
+    g.put("allThere", "HookMissing", "false")
     g.br("brInstance", g.valid(instance))
     g.br("brWindows", g.valid(windows))
     g.br("brGameState", g.valid(state))
     g.do("hookLocal", "LocalPS")
     local = "@hookLocal.PS"
     g.br("brHookPs", g.valid(local))
-    comp = g.var("SaveGameStateComponent", PS, local)
-    g.br("brHookComp", g.valid(comp))
-    g.br("brHost", g.val(KSL + ":IsServer"))
-    g.do("hostSync", "HostSync")
-    g.do("sendOwn", "SendOwn")
-    g.flow("scan", "brInstance", bind("evSelStop", instance), "brWindows")
+    g.do("sync", "HostSync")
+    g.br("brRetry", g.and_(g.var("HookMissing"), g.cmp("Less", g.var("HookTries"), HOOK_TRIES)))
+    g.incr("countTry", "HookTries")
+    g.do("retry", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="ShareCheck", Time=HOOK_RETRY,
+         bLooping="false")
+    g.flow(after, "scan", "allThere")
+    g.flow("check", "allThere")
+    g.flow("allThere", "brInstance", bind("evSelStop", instance), "brWindows")
     g.flow("brInstance.else", "brWindows")
     g.flow("brWindows", bind("evWindows", windows), "brGameState")
-    g.flow("brWindows.else", "brGameState")
+    g.flow("brWindows.else", missing("noWindows"), "brGameState")
     g.flow("brGameState", bind("evJoined", state), bind("evLeft", state), "hookLocal")
-    g.flow("brGameState.else", "hookLocal")
-    g.flow("hookLocal", "brHookPs", bind("evClass", local), "brHookComp", bind("evLoadout", comp),
-           bind("evPerks", comp), "brHost")
-    g.ends(["brHookPs.else", "brHookComp.else"], "brHost")
-    g.flow("brHost", "hostSync")
-    g.flow("brHost.else", "sendOwn")
+    g.flow("brGameState.else", missing("noGameState"), "hookLocal")
+    g.flow("hookLocal", "brHookPs", bind("evClass", local), "sync")
+    g.flow("brHookPs.else", missing("noLocal"), "sync")
+    g.flow("sync", "brRetry", "countTry", "retry")
     g.node("end", "event", name="ReceiveEndPlay", **{"class": ACTOR})
     gone = g.val(GFL + ":GetFSDGameInstance")
     g.br("brEnd", g.valid(gone))
@@ -1859,8 +1868,8 @@ def share_events(g, after):
 
 
 def g_data_events():
-    """BeginPlay: loads the settings (LoadSettings), starts the ShareCheck timer and runs the check once
-    (share_events), then starts an async load (KismetSystemLibrary LoadAsset, as the Async Load Asset node) of
+    """BeginPlay: loads the settings (LoadSettings), sets the sharing up (share_events), then starts an async
+    load (KismetSystemLibrary LoadAsset, as the Async Load Asset node) of
     each texture of TEXTURE_LOADS. Its custom event sets the variable when the load is done; it stays None if it
     fails."""
     g = D()
@@ -1868,11 +1877,9 @@ def g_data_events():
     g.node("seq", "seq", n=len(TEXTURE_LOADS) + 1)
     g.do("settings", "LoadSettings")
     g.node("me", "self")
-    g.do("shareTimer", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="ShareCheck", Time=SHARE_SECONDS,
-         bLooping="true")
     g.flow("begin", "seq")
-    g.flow("seq.then_0", "settings", "shareTimer")
-    share_events(g, "shareTimer")
+    g.flow("seq.then_0", "settings")
+    share_events(g, "settings")
     for k, (name, path) in enumerate(TEXTURE_LOADS, 1):
         soft = g.val(KSL + ":Conv_SoftObjPathToSoftObjRef",
                      SoftObjectPath=g.val(KSL + ":MakeSoftObjectPath", PathString=path))
@@ -1917,7 +1924,8 @@ def g_link_for():
 
 
 def g_share_scan():
-    """Links: every link of this world, found again (the safety net: links also tell DB_Data when they arrive)."""
+    """Links: every link of this world. Run once, at BeginPlay, for links that were here before DB_Data; later
+    ones tell DB_Data when they arrive (LinkChanged)."""
     g = D()
     g.do("find", GS + ":GetAllActorsOfClass", ActorClass=LINK_C)
     g.clear("clear", g.var("Links"))
@@ -1950,8 +1958,10 @@ def g_reindex():
 
 
 def g_link_changed():
-    """A link tells DB_Data that it is here or that its player is known now (DB_BuildShare_v2.Tell): it joins Links,
-    and when it is the local player's own, the build is sent through it at once."""
+    """A link tells DB_Data that it is here, that its player is known now, or (on the host) that the player's code
+    came (DB_BuildShare_v2.Tell). It joins Links. The local player's own link: the build is sent through it at
+    once, and the events are bound again (the local player state is certainly there now). On the host, HostSync
+    follows a moment later: who has sent a build decides whether the 0.1.0 table is kept up."""
     g = D()
     link = "@entry.Link"
     g.br("brLink", g.valid(link))
@@ -1960,14 +1970,22 @@ def g_link_changed():
     g.do("local", "LocalPS")
     g.br("brMine", g.and_(g.valid("@local.PS"), g.same(g.var("Player", LINK_C, link), "@local.PS")))
     g.do("own", "SendOwn")
-    g.flow("entry", "brLink", "add", "reindex", "local", "brMine", "own")
+    g.node("me", "self")
+    g.do("hookAgain", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="ShareCheck", Time=EVENT_DELAY,
+         bLooping="false")
+    g.br("brHost", g.val(KSL + ":IsServer"))
+    g.do("syncSoon", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="HostSync", Time=EVENT_DELAY,
+         bLooping="false")
+    g.flow("entry", "brLink", "add", "reindex", "local", "brMine", "own", "hookAgain")
+    g.flow("brMine.else", "brHost", "syncSoon")
     return g.data()
 
 
 def g_send_own():
     """The local player's build into their own link, when it is not there already. The host writes it; a client
     sends it (Server_SetCode) once per code and link, and only through a link it owns (a server RPC needs the
-    owner's connection). LocalCode is cheap while the save did not change (SaveCode, CodeOf).
+    owner's connection; while the link does not name its owner yet, this is tried again every OWNER_RETRY, at most
+    OWNER_TRIES times). LocalCode is cheap while the save did not change (SaveCode, CodeOf).
     The write or the RPC is the last step: on the host a link may answer it by calling LinkChanged, which runs this
     function again before the first call returns."""
     g = D()
@@ -1999,20 +2017,32 @@ def g_send_own():
     g.br("brSend", unsent)
     g.put("keepSent", "SentCode", own)
     g.put("keepSentLink", "SentLink", link)
+    g.put("triesDone", P + "Tries", "0")
     g.do("send", LINK_C + ":Server_SetCode", target=link, NewCode=own)
-    g.flow("brServer.else", "brOwner", "brSend", "keepSent", "keepSentLink", "send")
+    g.br("brAgain", g.cmp("Less", g.var(P + "Tries"), OWNER_TRIES))
+    g.incr("countTry", P + "Tries")
+    g.node("me", "self")
+    g.do("again", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="SendOwn", Time=OWNER_RETRY,
+         bLooping="false")
+    g.flow("brServer.else", "brOwner", "brSend", "keepSent", "keepSentLink", "triesDone", "send")
+    g.flow("brOwner.else", "brAgain", "countTry", "again")
     return g.data()
 
 
 def g_host_sync():
-    """The host: one link per player, owned by the player's controller so the player can send through it; links of
-    players who left are destroyed; then the host's own build (SendOwn). Alone: no links are made. A link starts
-    empty and stays so for a player without the mod.
+    """Run by every trigger of the sharing (see the module docstring). A client: SendOwn, nothing else.
+    The host: one link per player, owned by the player's controller so the player can send through it; links of
+    players who left are destroyed; the 0.1.0 perk table (DB_PerkShare_v1) collects every LEGACY_SECONDS only
+    while some other player has sent no build (a player without the mod, or on 0.1.0: the table is what clients
+    read for them), else its timer is stopped; then the host's own build (SendOwn). Alone: no links are made and
+    the table rests. A link starts empty and stays so for a player without the mod.
     Spawning a link makes it call LinkChanged while this function runs: this function keeps its own variables
     (HostSync_...) and reads LinkMap again for each player."""
     g = D()
     P = "HostSync_"
     g.br("brServer", g.val(KSL + ":IsServer"))
+    g.put("need0", P + "Need", "false")
+    g.do("me", "LocalPS")
     g.put("keepState", P + "State", g.val(GS + ":GetGameState"))
     g.br("brState", g.valid(g.var(P + "State")))
     g.put("keepPlayers", P + "Players", g.var("PlayerArray", GSBASE, g.var(P + "State")))
@@ -2039,21 +2069,43 @@ def g_host_sync():
     g.br("brMoved", moved)
     g.do("setOwner", ACTOR + ":SetOwner", target=link, NewOwner=g.var(P + "Owner"))
     g.do("pushOwner", ACTOR + ":ForceNetUpdate", target=link)
-    g.flow("entry", "brServer", "keepState", "brState", "keepPlayers", "brMany", "players.Exec")
+    # Another player whose link holds no code: the 0.1.0 table is needed.
+    g.br("brOther", g.val(KML + ":NotEqual_ObjectObject", A=ps, B="@me.PS"))
+    g.br("brLinked", g.valid(link))
+    g.br("brSent", g.cmp("Greater", g.strlen(g.var("Code", LINK_C, link)), "0"))
+    g.put("needed", P + "Need", "true")
+    g.flow("entry", "brServer", "need0", "me", "keepState", "brState", "keepPlayers", "brMany", "players.Exec")
     g.flow("players.LoopBody", "asPs", "keepPs", "keepLink", "keepOwner", "brHas")
-    g.flow("brHas.else", "spawn", "asNew", "keepNew", "setPlayer", "finish", "addNew", "mapNew")
-    g.flow("brHas", "brMoved", "setOwner", "pushOwner")
-    # Links of players who left, then the host's own build.
+    g.flow("brHas.else", "spawn", "asNew", "keepNew", "setPlayer", "finish", "addNew", "mapNew", "brOther")
+    g.flow("brHas", "brMoved", "setOwner", "pushOwner", "brOther")
+    g.flow("brMoved.else", "brOther")
+    g.flow("brOther", "brLinked", "brSent")
+    g.ends(["brLinked.else", "brSent.else"], "needed")
+    # Links of players who left.
     stale, _ = g.each("stale", g.var("Links"))
     g.br("brStaleOk", g.valid(stale))
     g.br("brStale", g.valid(g.var("Player", LINK_C, stale)))
     g.do("destroy", ACTOR + ":K2_DestroyActor", target=stale)
     g.do("reindex", "Reindex")
-    g.do("own", "SendOwn")
     g.ends(["brState.else", "brMany.else", "players.Completed"], "stale.Exec")
     g.flow("stale.LoopBody", "brStaleOk", "brStale")
     g.flow("brStale.else", "destroy")
-    g.flow("stale.Completed", "reindex", "own")
+    # The 0.1.0 table's timer, then the host's own build.
+    g.do("findTable", GS + ":GetActorOfClass", ActorClass=SHARE_C)
+    table = "@findTable.ReturnValue"
+    g.br("brTable", g.valid(table))
+    g.br("brNeed", g.var(P + "Need"))
+    g.br("brRunning", g.val(KSL + ":K2_IsTimerActive", Object=table, FunctionName="Collect"))
+    g.do("tableOn", KSL + ":K2_SetTimer", Object=table, FunctionName="Collect", Time=LEGACY_SECONDS, bLooping="true")
+    g.do("collectNow", SHARE_C + ":Collect", target=g.cast_("asTable", SHARE_C, table))
+    g.do("tableOff", KSL + ":K2_ClearTimer", Object=table, FunctionName="Collect")
+    g.do("own", "SendOwn")
+    g.flow("stale.Completed", "reindex", "findTable", "brTable", "brNeed", "brRunning", "own")
+    g.flow("brRunning.else", "tableOn", "asTable", "collectNow", "own")
+    g.flow("asTable.CastFailed", "own")
+    g.flow("brNeed.else", "tableOff", "own")
+    g.flow("brTable.else", "own")
+    g.flow("brServer.else", "own")
     return g.data()
 
 
@@ -2082,7 +2134,8 @@ def g_link_events():
     link's owner calls it: the engine sends a server RPC through the owner's connection. Ignored: a code that does
     not start with DB1:, is longer than any build, or holds a character no build code has (CODE_CHARS), so a
     player cannot put arbitrary text into what others copy with COPY CODE. The readers parse the rest like a
-    pasted code. The code is set last and pushed to the clients at once (the link itself replicates rarely)."""
+    pasted code. The code is pushed to the clients at once (the link itself replicates rarely), and the host's
+    DB_Data is told (Tell)."""
     g = D()
     g.node("begin", "event", name="ReceiveBeginPlay", **{"class": ACTOR})
     g.do("tell", "Tell")
@@ -2103,10 +2156,11 @@ def g_link_events():
     g.put("fromPlayer", "FromPlayer", "true")
     g.put("setCode", "Code", code)
     g.do("push", ACTOR + ":ForceNetUpdate")
+    g.do("tellHost", "Tell")
     g.flow("set", "brOk", "keepChars", "clean", "chars.Exec")
     g.flow("chars.LoopBody", "brChar")
     g.flow("brChar.else", "dirty", "chars.Break")
-    g.flow("chars.Completed", "brClean", "known", "fromPlayer", "setCode", "push")
+    g.flow("chars.Completed", "brClean", "known", "fromPlayer", "setCode", "push", "tellHost")
     return g.data()
 
 
@@ -2210,13 +2264,16 @@ def g_share_collect():
 
 
 def g_share_events():
+    """BeginPlay on the host: DB_Data's HostSync a moment later. It starts this actor's Collect timer when some
+    player needs the table, and stops it when nobody does."""
     g = D()
     g.node("begin", "event", name="ReceiveBeginPlay", **{"class": ACTOR})
     g.br("brAuthority", g.and_(g.val(ACTOR + ":HasAuthority"), g.val(KSL + ":IsServer")))
-    g.node("me", "self")
-    g.do("timer", KSL + ":K2_SetTimer", Object="@me.self", FunctionName="Collect", Time="3.0", bLooping="true")
-    g.do("collect", "Collect")
-    g.flow("begin", "brAuthority", "timer", "collect")
+    g.do("find", GS + ":GetActorOfClass", ActorClass=DATA_C)
+    g.br("brData", g.valid("@find.ReturnValue"))
+    g.do("sync", KSL + ":K2_SetTimer", Object="@find.ReturnValue", FunctionName="HostSync", Time=EVENT_DELAY,
+         bLooping="false")
+    g.flow("begin", "brAuthority", "find", "brData", "sync")
     return g.data()
 
 
@@ -2280,6 +2337,7 @@ def _data_members():
         obj("Reindex_Keep", LINK_C, array=True), obj("SendOwn_Link", LINK_C), t("SendOwn_Own", S),
         obj("HostSync_State", GSBASE), obj("HostSync_Players", PLAYERSTATE, array=True), obj("HostSync_PS", PS),
         obj("HostSync_Link", LINK_C), obj("HostSync_Owner", ACTOR), obj("PerksOf_Link", LINK_C),
+        t("HostSync_Need", B), t("SendOwn_Tries", I), t("HookMissing", B), t("HookTries", I),
         # What SaveCode and CodeOf last worked a code out from (they return the last code while it is the same).
         obj("SaveCode_LastClass", CHARID), t("SaveCode_LastGuids", "struct", GUID, array=True),
         t("SaveCode_LastKeys", "struct", GUID, array=True), t("SaveCode_LastVals", "struct", SELECTION, array=True),
