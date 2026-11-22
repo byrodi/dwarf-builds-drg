@@ -2009,6 +2009,8 @@ def g_init_try_show():
 
 def g_init_find_screen():
     """ScreenTmp, CanvasTmp: the class selection screen and its full-screen canvas, or None.
+    0. No selection screen widget in this world at all: nothing to find, and only this one scan is made (the
+       usual case while the poll waits for the screen).
     1. Every AnchorClass widget whose owner (outer of its widget tree) is a selection screen that is still part of
        the UI (in the viewport or in a parent); its parent is the canvas. A shown screen wins over a hidden one.
     2. No canvas found: a selection screen in the viewport (shown first), for the viewport fallback.
@@ -2020,7 +2022,14 @@ def g_init_find_screen():
     g.branch("brA", "hasA.ReturnValue")
     g.call("findA", WBL + ":GetAllWidgetsOfClass", WidgetClass=ref(g.get("aCls1", "AnchorClass")), TopLevelOnly="false")
     el = g.loop("eachA", "findA.FoundWidgets")
-    g.flow("entry", "noScr", "noCan", "brA", "findA", "eachA.Exec")
+    g.call("hasProbe", KSL + ":IsValidClass", Class=ref(g.get("sClsP", "ScreenClass")))
+    g.branch("brProbe", "hasProbe.ReturnValue")
+    g.call("probe", WBL + ":GetAllWidgetsOfClass", WidgetClass=ref(g.get("sClsQ", "ScreenClass")), TopLevelOnly="false")
+    g.call("probeN", KARR + ":Array_Length", TargetArray=ref("probe.FoundWidgets"))
+    g.branch("brAny", kml(g, "anyScreen", "Greater_IntInt", A=ref("probeN.ReturnValue"), B="0"))
+    g.flow("entry", "noScr", "noCan", "brProbe", "probe", "brAny", "brA")
+    g.flow("brProbe.else", "brA")
+    g.flow("brA", "findA", "eachA.Exec")
     g.call("tree", KSL + ":GetOuterObject", Object=ref(el))
     g.call("owner", KSL + ":GetOuterObject", Object=ref("tree.ReturnValue"))
     g.call("ownerCls", GS + ":GetObjectClass", Object=ref("owner.ReturnValue"))

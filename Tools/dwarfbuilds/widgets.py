@@ -1091,6 +1091,7 @@ def column_members():
         t("FpSels", "struct", SELECTION, array=True), t("FpPerks", "struct", PERKITEM, array=True),
         t("FpStats", "struct", PROGRESS, array=True), t("FpShareIds", "int", array=True),
         t("FpSharePerks", "object", PERKASSET, array=True), t("FpShareRanks", "int", array=True),
+        t("FpShareClasses", "object", CHARID, array=True), t("FpShareCounts", "int", array=True), t("FpYou", "bool"),
         t("SameTmp", "bool"), t("LoadTmp", "int"), t("LinkTmp", "string"),
     ], "functions": [
         {"name": "SameAsLast", "inputs": [t("Player", "object", PS)], "outputs": [t("Same", "bool")]},
@@ -1210,8 +1211,9 @@ def g_column_same():
     """Whether nothing ShowPlayer shows of Player can have changed since the column last drew a player: the same
     player, class, name, level, host flag, selected loadout and Data.Revision (the local player's save), the same
     replicated selections, perks and stats, the same host perk table (DB_PerkShare_v1) and link (DB_BuildShare_v2),
-    the hexagon textures loaded as before, and Data as old as before (10 s after it spawned "waiting for the host"
-    becomes "not available"). Also false every FRESH_FOR seconds, for what no input here covers, and after a
+    the hexagon textures loaded as before, the same answer to "is this you", and Data as old as before (10 s after
+    it spawned "waiting for the host" becomes "not available"; until then a client's column without the host's
+    table is not "same": the table may arrive). Also false every FRESH_FOR seconds, for what no input here covers, and after a
     SEEN_GAP without a call. Records the inputs for the next call. Data and Player must be valid.
     ShowPlayer runs once a second per column; this is its cheap way out: the build code, header and perks are worked
     out only when one of their sources changed."""
@@ -1244,6 +1246,8 @@ def g_column_same():
     early = g.rv(KML + ":Less_FloatFloat", A=g.rv(ACTOR + ":GetGameTimeSinceCreation", target=data), B="10.0")
     rev = g.v("Revision", cls(DATA), data)
     now = g.rv(GS + ":GetRealTimeSeconds")
+    me = g.f(cls(DATA) + ":LocalPS", target=data)
+    you = g.obj_eq(player, "@%s.PS" % me)
     # The selected loadout of the class in the local save (what the local player's column shows).
     load0 = g.put("LoadTmp", "-1")
     save = g.rv(GFL + ":GetFSDSaveGame")
@@ -1252,7 +1256,8 @@ def g_column_same():
     first = g.put("SameTmp", both(
         g.obj_eq(player, g.v("FpPlayer")), g.obj_eq(klass, g.v("FpClass")), g.str_eq(name, g.v("FpName")),
         g.eq(level, g.v("FpLevel")), bool_eq(host, g.v("FpHost")), bool_eq(hexes, g.v("FpHex")),
-        bool_eq(early, g.v("FpEarly")), g.eq(g.v("LoadTmp"), g.v("FpLoadout")), g.eq(rev, g.v("FpRev")),
+        bool_eq(early, g.v("FpEarly")), bool_eq(you, g.v("FpYou")), g.eq(g.v("LoadTmp"), g.v("FpLoadout")),
+        g.eq(rev, g.v("FpRev")),
         within("FpAt", FRESH_FOR), within("FpSeen", SEEN_GAP)))
     seen = g.put("FpSeen", now)
     # The player's replicated save state.
@@ -1267,7 +1272,10 @@ def g_column_same():
     # The host's 0.1.0 perk table, once this client found it.
     share = g.v("PerksOf_Share", cls(DATA), data)
     has_share = g.br(g.valid(share))
-    pairs = (("Ids", "FpShareIds"), ("Perks", "FpSharePerks"), ("Ranks", "FpShareRanks"))
+    pairs = (("Ids", "FpShareIds"), ("Classes", "FpShareClasses"), ("Perks", "FpSharePerks"),
+             ("Ranks", "FpShareRanks"), ("Counts", "FpShareCounts"))
+    # No table yet: a client may still get it while Data is young (the host never has one).
+    no_share = still(g.rv(KML + ":BooleanOR", A=g.rv(KSL + ":IsServer"), B=g.not_(early)))
     share_same = still(*[identical(g.v(prop, cls(SHARE), share), g.v(var)) for prop, var in pairs])
     share_keep = [g.put(var, g.v(prop, cls(SHARE), share)) for prop, var in pairs]
     # The player's link: its code and whether its perks count.
@@ -1281,14 +1289,14 @@ def g_column_same():
     link_keep = g.put("FpLink", g.v("LinkTmp"))
     same = g.br(g.v("SameTmp"))
     store = [g.put("FpPlayer", player), g.put("FpClass", klass), g.put("FpName", name), g.put("FpLevel", level),
-             g.put("FpHost", host), g.put("FpHex", hexes), g.put("FpEarly", early),
+             g.put("FpHost", host), g.put("FpHex", hexes), g.put("FpEarly", early), g.put("FpYou", you),
              g.put("FpLoadout", g.v("LoadTmp")), g.put("FpRev", rev), g.put("FpAt", now)]
-    g.flow("entry", load0, has_save, load1, first)
+    g.flow("entry", me, load0, has_save, load1, first)
     g.flow(has_save + ".else", first)
     g.flow(first, seen, has_comp, comp_same, *comp_keep, has_share)
     g.flow(has_comp + ".else", none_same, *none_keep, has_share)
     g.flow(has_share, share_same, *share_keep, link)
-    g.flow(has_share + ".else", link)
+    g.flow(has_share + ".else", no_share, link)
     g.flow(link, sig0, has_link, sig1, link_same)
     g.flow(has_link + ".else", link_same)
     g.flow(link_same, link_keep, same, "result")

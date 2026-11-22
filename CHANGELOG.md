@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Perks the game does not share show as "Not available" instead of an empty row.
+- A build is sent when it changes (the game's own events), not on a timer, and is worked out again only when the
+  loadout or perks in the save changed.
 - The team window works out a column and the roster strip again only when what they show changed.
 - On the Space Rig the check for the class selection screen slows down after the first minute.
 

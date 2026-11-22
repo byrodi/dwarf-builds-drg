@@ -92,11 +92,13 @@ PUBLIC = {
         "variables": [obj("HexBg", TEXTURE), obj("HexOutline", TEXTURE), obj("PerksOf_Share", cls(SHARE)),
                       t("Revision", I)],
         "functions": [
+            # The local player's FSDPlayerState, or None.
+            {"name": "LocalPS", "outputs": [obj("PS", PS)]},
             # Players in lobby order (AFSDGameState.GetNetworkSortedPlayerArray).
             {"name": "GetPlayers", "outputs": [obj("Players", PS, array=True)]},
             # Build code of a player; "" when the player has no class yet. Local player: from the save
-            # (GetCurrentLoadout); others: their DB_BuildShare_v2 (LinkFor), else the replicated
-            # SaveGameStateComponent.ItemUpgradeSelections.
+            # (GetCurrentLoadout), worked out again only when the save's loadout or perks changed; others: their
+            # DB_BuildShare_v2 (LinkFor), else the replicated SaveGameStateComponent.ItemUpgradeSelections.
             {"name": "CodeOf", "inputs": [obj("Player", PS)], "outputs": [t("Code", S)]},
             # The local player's current build code ("" if none).
             {"name": "LocalCode", "outputs": [t("Code", S)]},
@@ -110,13 +112,14 @@ PUBLIC = {
              "outputs": [t("Sub", S), t("Color", "struct", LINEAR), obj("Icon", TEXTURE)]},
             # Equipped perks of a player: passive ones, then active ones, then the proficiency. State: 0 = known; 1 = not available (the host does not
             # run this mod: no share actor 10 s after DB_Data spawned); 2 = not received yet (share actor not there
-            # yet in the first 10 s, or no data for this player/class yet); 3 = not available: the game gave this
-            # player's perks to nobody who could pass them on (no perks known is "unknown", not "no perks").
+            # yet in the first 10 s, no data for this player/class yet, or the player's link is still young and
+            # may get their build); 3 = not available: the game gave this player's perks to nobody who could pass
+            # them on (no perks known is "unknown", not "no perks").
             {"name": "PerksOf", "inputs": [obj("Player", PS)],
              "outputs": [obj("Perks", PERKASSET, array=True), t("Ranks", I, array=True), t("State", I)]},
-            # Another player's DB_BuildShare_v2 when it is the best source of their build: on a client any link the
-            # host has filled, on the host only one the player's own mod sent. None for the local player (the save is
-            # the source), for a link without a code and when there is none.
+            # Another player's DB_BuildShare_v2 when it holds their build: a link with a code (on the host only a
+            # code the player's own mod sent; a host of another build may fill links itself). None for the local
+            # player (the save is the source), for an empty link (a player without the mod) and when there is none.
             {"name": "LinkFor", "inputs": [obj("Player", PS)], "outputs": [obj("Link", cls(LINK))]},
             # Class of a code; Valid = false for anything that is not a DB1 code of a known class with at least one
             # part whose item index is above 0.
@@ -204,11 +207,13 @@ PUBLIC = {
         ],
     },
     LINK: {
-        # FROZEN replicated layout, in this order (see common.LINK). Player: whose build. Code: a DB1 build code; its
+        # FROZEN replicated layout, in this order (see common.LINK). Player: whose build (RepNotify: a client may get
+        # the link before the player state). Code: a DB1 build code, empty until the player's mod sends one; its
         # perks part counts only when PerksKnown. FromPlayer: the player's own mod sent it (Server_SetCode, a reliable
-        # server RPC in the event graph: data.g_link_events), not the host from what it sees of the player.
+        # server RPC in the event graph: data.g_link_events). This mod sets both with the code; they stay for hosts
+        # of other builds that fill links from what the host sees.
         "variables": [
-            obj("Player", PS, replicated=True),
+            obj("Player", PS, replicated=True, repnotify=True),
             t("Code", S, replicated=True),
             t("PerksKnown", B, replicated=True),
             t("FromPlayer", B, replicated=True),
