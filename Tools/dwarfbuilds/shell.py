@@ -7,8 +7,9 @@ first in-game test. The look follows the game's own menus: the brown menu dim, t
 orange top rule, white Rift Soft titles, Carbon categories and the game's action button (common.game_button).
 UMG font sizes are points at 96 DPI.
 Nothing ticks. The window runs one 1 s timer while it is open. The actor (InitSpacerig/InitCave) waits for input
-and runs a 0.5 s poll for the class selection screen (always on the Space Rig; in missions only for a while after
-BeginPlay and after a selection start); DB_Select sits inside that screen and shows and hides with it.
+and runs a 0.5 s poll for the class selection screen for a while after BeginPlay and after a selection start; then
+a mission stops it and the Space Rig slows it to 2 s until the screen is found; DB_Select sits inside that screen
+and shows and hides with it.
 The website (common.SITE_URL): BROWSE (the third tab) and PUBLISH MY BUILD open it in the Steam overlay, OPEN IN BROWSER in
 the web browser. The clipboard is read only when the player presses PASTE FROM CLIPBOARD.
 """
@@ -24,6 +25,7 @@ from dwarfbuilds.common import HUBMOD, MODHUB  # noqa: E402
 ACTOR = "/Script/Engine.Actor"
 CONTROLLER = "/Script/Engine.Controller"
 PLAYERCONTROLLER = "/Script/Engine.PlayerController"
+PLAYERSTATE = "/Script/Engine.PlayerState"
 GAMEINSTANCE = FSD + "FSDGameInstance"
 CAMERA_LOCATION = FSD + "ECharselectionCameraLocation"
 INPUTLIB = "/Script/Engine.KismetInputLibrary"
@@ -1042,9 +1044,38 @@ def g_win_update_header():
     return g.data()
 
 
+def g_win_roster_same():
+    """Whether the chips already show what UpdateRoster would draw: the same players in the same order, each with
+    the same class and name, and the same filter (Shown) and page. Records them for the next call."""
+    g = Graph()
+    g.call("clearC", KARR + ":Array_Clear", TargetArray=ref(g.get("c0", "RsClasses")))
+    g.call("clearN", KARR + ":Array_Clear", TargetArray=ref(g.get("n0", "RsNames")))
+    player = g.loop("each", g.get("pl0", "Players"))
+    valid(g, "player", player)
+    g.call("cls", PS + ":GetSelectedCharacterID", target=ref(player))
+    g.call("name", PLAYERSTATE + ":GetPlayerName", target=ref(player))
+    g.call("addC", KARR + ":Array_Add", TargetArray=ref(g.get("c1", "RsClasses")), NewItem=ref("cls.ReturnValue"))
+    g.call("addN", KARR + ":Array_Add", TargetArray=ref(g.get("n1", "RsNames")), NewItem=ref("name.ReturnValue"))
+    g.flow("entry", "clearC", "clearN", "each.Exec")
+    g.flow("each.LoopBody", "brPlayer", "addC", "addN")
+    same = kml(g, "samePage", "EqualEqual_IntInt", A=ref(g.get("ps", "PageStart")), B=ref(g.get("rpPage", "RpPage")))
+    for k, (now, last) in enumerate((("Players", "RpPlayers"), ("Shown", "RpShown"), ("RsClasses", "RpClasses"),
+                                     ("RsNames", "RpNames"))):
+        g.call("same%d" % k, KARR + ":Array_Identical", ArrayA=ref(g.get("a%d" % k, now)),
+               ArrayB=ref(g.get("b%d" % k, last)))
+        same = kml(g, "and%d" % k, "BooleanAND", A=ref(same), B=ref("same%d.ReturnValue" % k))
+        g.set("keep%d" % k, last, value=g.get("k%d" % k, now))
+    g.set("setSame", "RsSame", value=same)
+    g.set("keepPage", "RpPage", value=g.get("ps2", "PageStart"))
+    g.flow("each.Completed", "setSame", "keep0", "keep1", "keep2", "keep3", "keepPage", "result")
+    g.link(g.get("out", "RsSame"), "result.Same")
+    return g.data()
+
+
 def g_win_update_roster():
     """One chip per player. Chips are created once and reused. Nothing to do while the roster is hidden
-    (4 or fewer players, or the BUILD CODE tab): SelectPlayer and SetTab refresh it when it shows again."""
+    (4 or fewer players, or the BUILD CODE tab): SelectPlayer and SetTab refresh it when it shows again. Nothing
+    to do either while it shows what it showed (RosterSame): the 1 s refresh then sets no chip."""
     g = Graph()
     g.call("n", KARR + ":Array_Length", TargetArray=ref(g.get("pl", "Players")))
     n = "n.ReturnValue"
@@ -1075,7 +1106,10 @@ def g_win_update_roster():
     g.call("icon", cls(CHIP) + ":SetIcon", target=ref(chip), Texture=ref("head.Icon"))
     g.call("width", cls(CHIP) + ":SetWidth", target=ref(chip), Width=ref(g.get("cw", "ChipWidth")))
     g.call("show", UMG + "Widget:SetVisibility", target=ref(chip), InVisibility="Visible")
-    g.flow("entry", "brBig", "setW", "eachI")
+    g.call("drawn", "RosterSame")
+    g.branch("brDrawn", "drawn.Same")
+    g.flow("entry", "brBig", "drawn", "brDrawn")
+    g.flow("brDrawn.else", "setW", "eachI")
     g.flow("eachI.LoopBody", "chip", "head", "set", "icon", "width", "show")
     # Chips of players who left.
     g.call("nChips", KARR + ":Array_Length", TargetArray=ref(g.get("chips", "Chips")))
@@ -1518,7 +1552,8 @@ ANCHOR_CLASS = "/Game/UI/CharacterSelectionMK2/Lobby_BarTop_Countdown.Lobby_BarT
 SEL_ZORDER = 9999             # the screen's own children there are at 0
 ZORDER_RIG, ZORDER_MISSION = 13, 100   # fallback without the canvas: viewport layers just above the screen
 POLL_SECONDS = "0.5"          # InitSpacerig/InitCave poll for the screen (SelectPoll)
-MISSION_POLL = 60.0           # a mission polls this long after BeginPlay and after each selection start
+POLL_WINDOW = 60.0            # the poll runs at POLL_SECONDS this long after BeginPlay and after each selection start
+SLOW_POLL = "2.0"             # the Space Rig's poll after that, while the screen is not found
 CANVAS = UMG + "CanvasPanel"
 CANVASSLOT = UMG + "CanvasPanelSlot"
 ANCHORS = "/Script/Slate.Anchors"
@@ -2026,24 +2061,40 @@ def g_init_find_screen():
 
 
 def g_init_poll(rig):
-    """The 0.5 s poll. Space Rig: always (the screen can open at any time; while attached a call costs a few
-    checks). Mission: until MISSION_POLL seconds after BeginPlay or the last selection start (a late join), and on
-    while the overlay sits in a live screen; then it stops itself."""
+    """The poll, every POLL_SECONDS until POLL_WINDOW seconds after BeginPlay or the last selection start, and on
+    while the overlay sits in a live screen (a call then costs a few checks). After that, while no screen is found
+    (each call then looks through the widgets twice: FindScreen): a mission stops the poll (its screen only comes
+    with a selection start, which starts the poll again); the Space Rig, where the screen can open at any time,
+    slows it to SLOW_POLL (PollSlow), and goes back to POLL_SECONDS once the overlay is attached. So the overlay
+    still does not depend on the game's selection events: without them it shows at most SLOW_POLL late."""
     g = Graph()
+    me = g.self_()
     g.call("try", "TryShow")
-    g.flow("entry", "try")
-    if rig:
-        return g.data()
-    g.call("now", GS + ":GetRealTimeSeconds")
-    g.branch("brTime", kml(g, "early", "Less_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("until", "PollUntil"))))
     valid(g, "hasSel", g.get("sel0", "SelectUI"))
     g.call("att", cls(SELECT) + ":IsAttached", target=ref(g.get("sel1", "SelectUI")))
     g.branch("brAtt", "att.Up")
-    g.call("stop", KSL + ":K2_ClearTimer", Object=ref(g.self_()), FunctionName="SelectPoll")
-    g.flow("try", "brTime")
-    g.flow("brTime.else", "brHasSel", "att", "brAtt")
-    g.flow("brAtt.else", "stop")
-    g.flow("brHasSel.else", "stop")
+    g.call("now", GS + ":GetRealTimeSeconds")
+    g.branch("brTime", kml(g, "early", "Less_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("until", "PollUntil"))))
+    g.flow("entry", "try", "brHasSel", "att", "brAtt")
+    g.flow("brAtt.else", "brTime")
+    g.flow("brHasSel.else", "brTime")
+    if not rig:
+        g.call("stop", KSL + ":K2_ClearTimer", Object=ref(me), FunctionName="SelectPoll")
+        g.flow("brTime.else", "stop")
+        return g.data()
+    # Attached: back to the fast poll (Update follows the screen at that rate).
+    g.branch("brFast", g.get("slow0", "PollSlow"))
+    g.call("faster", KSL + ":K2_SetTimer", Object=ref(me), FunctionName="SelectPoll", Time=POLL_SECONDS,
+           bLooping="true")
+    g.set("fastOn", "PollSlow", default="false")
+    g.flow("brAtt", "brFast", "faster", "fastOn")
+    # Not found and the window is over: the slow poll.
+    g.branch("brSlow", g.get("slow1", "PollSlow"))
+    g.call("slower", KSL + ":K2_SetTimer", Object=ref(me), FunctionName="SelectPoll", Time=SLOW_POLL,
+           bLooping="true")
+    g.set("slowOn", "PollSlow", default="true")
+    g.flow("brTime.else", "brSlow")
+    g.flow("brSlow.else", "slower", "slowOn")
     return g.data()
 
 
@@ -2056,13 +2107,15 @@ def g_init_hide_select():
 
 
 def start_poll(g, nid, rig):
-    """(Re)starts SelectPoll; in a mission it then runs MISSION_POLL seconds from now. Returns first, last node."""
-    steps = []
-    if not rig:
-        g.call(nid + "Now", GS + ":GetRealTimeSeconds")
-        g.set(nid + "Until", "PollUntil",
-              value=kml(g, nid + "Add", "Add_FloatFloat", A=ref(nid + "Now.ReturnValue"), B=str(MISSION_POLL)))
-        steps.append(nid + "Until")
+    """(Re)starts SelectPoll at POLL_SECONDS, for POLL_WINDOW seconds from now (g_init_poll says what follows).
+    Returns first, last node."""
+    g.call(nid + "Now", GS + ":GetRealTimeSeconds")
+    g.set(nid + "Until", "PollUntil",
+          value=kml(g, nid + "Add", "Add_FloatFloat", A=ref(nid + "Now.ReturnValue"), B=str(POLL_WINDOW)))
+    steps = [nid + "Until"]
+    if rig:
+        g.set(nid + "Fast", "PollSlow", default="false")
+        steps.append(nid + "Fast")
     me = g.self_()
     g.call(nid + "Clear", KSL + ":K2_ClearTimer", Object=ref(me), FunctionName="SelectPoll")
     g.call(nid + "Set", KSL + ":K2_SetTimer", Object=ref(me), FunctionName="SelectPoll", Time=POLL_SECONDS,
@@ -2280,11 +2333,12 @@ def trees():
 def init_members():
     """InitSpacerig / InitCave. KeyArmed: B was pressed while the game had the input (the release may open the
     window). SelectUI: the class selection overlay of this level; ScreenClass, AnchorClass (loaded once,
-    ClassesTried), ScreenTmp, CanvasTmp, ZTmp: TryShow's working values; PollUntil: end of the mission poll."""
+    ClassesTried), ScreenTmp, CanvasTmp, ZTmp: TryShow's working values; PollUntil: end of the fast poll;
+    PollSlow: the Space Rig's poll runs at SLOW_POLL."""
     return {"variables": [t("KeyArmed", B), t("KeyArmedAt", F), obj("SelectUI", cls(SELECT)),
                           t("ScreenClass", "class", USERWIDGET), t("AnchorClass", "class", USERWIDGET),
                           t("ClassesTried", B), obj("ScreenTmp", USERWIDGET), obj("CanvasTmp", CANVAS),
-                          t("ZTmp", I, default=str(ZORDER_MISSION)), t("PollUntil", F)],
+                          t("ZTmp", I, default=str(ZORDER_MISSION)), t("PollUntil", F), t("PollSlow", B)],
             "functions": [{"name": "TryShow"}, {"name": "FindScreen"}, {"name": "SelectPoll"},
                           {"name": "HideSelect"}]}
 
@@ -2311,8 +2365,13 @@ def members():
             t("Tab", I, default="0"), obj("Columns", cls(COLUMN), array=True), obj("Chips", cls(CHIP), array=True),
             t("ChipWidth", F, default=str(float(CHIP_MAX))), t("Manual", B), t("Inited", B), t("TakeOpen", B),
             t("OpenTmp", B), t("CodeText", S), t("CodeValid", B), t("PanelWidth", I, default=str(PANEL_WIDTH)),
+            # RosterSame: what the chips were last drawn from (Rp...), and its working values (Rs...).
+            obj("RpPlayers", PS, array=True), t("RpShown", I, array=True), obj("RpClasses", CHARID, array=True),
+            t("RpNames", S, array=True), t("RpPage", I, default="-1"), obj("RsClasses", CHARID, array=True),
+            t("RsNames", S, array=True), t("RsSame", B),
         ], "functions": [
             {"name": "Refresh"}, {"name": "TimerRefresh"}, {"name": "Collect"}, {"name": "UpdateWidth"},
+            {"name": "RosterSame", "outputs": [t("Same", B)]},
             {"name": "ClassIndex", "inputs": [obj("Player", PS)], "outputs": [t("Index", I)]},
             {"name": "ShowPage"}, {"name": "UpdateHeader"}, {"name": "UpdateRoster"},
             {"name": "FitToScreen", "inputs": [t("WithRoster", B)]},
@@ -2376,6 +2435,7 @@ def graphs():
                  "Collect": g_win_collect(), "UpdateWidth": g_win_update_width(),
                  "ClassIndex": g_win_class_index(), "ShowPage": g_win_show_page(),
                  "UpdateHeader": g_win_update_header(), "UpdateRoster": g_win_update_roster(),
+                 "RosterSame": g_win_roster_same(),
                  "FitToScreen": g_win_fit(),
                  "GetChip": g_win_get_chip(), "SetFilter": g_win_set_filter(), "SetTab": g_win_set_tab(),
                  "PageBy": g_win_page_by(), "Dismiss": g_win_dismiss(), "Stop": g_win_stop(),

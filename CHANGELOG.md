@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Every player's build and perks reach every client when the host runs this version: each player's mod sends its
+  own build to the host, which shares it with everyone (`DB_BuildShare_v2`). Works in one lobby with 0.1.0 and
+  with players without the mod.
+
+### Changed
+
+- Perks the game does not share show as "Not available" instead of an empty row.
+- The team window works out a column and the roster strip again only when what they show changed.
+- On the Space Rig the check for the class selection screen slows down after the first minute.
+
+### Fixed
+
+- Clients saw empty perk rows for other players and often only part of the host's upgrades
+  ([#1](https://github.com/byrodi/dwarf-builds-drg/issues/1)).
+
+Thanks to [Elytras](https://github.com/Elytras) for the report, the analysis and the relay design, which this
+version takes from their rewrite of the mod.
+
 ## [0.1.0] - 2026-11-22
 
 ### Added
