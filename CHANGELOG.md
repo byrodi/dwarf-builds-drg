@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-23
+
+### Fixed
+
+- B did nothing in missions for players who are not the host. The game gives each player a new player controller
+  on the way from the Space Rig into a mission, and a client gets it from the host a moment after the level
+  starts; the mod kept listening to the old one. It now moves to the new controller when it arrives (no new
+  timer).
+
 ## [0.2.0] - 2026-11-23
 
 ### Added
@@ -50,6 +59,7 @@ version takes from their rewrite of the mod.
 - Mod Hub page to change the key that opens the window.
 - Works on the release game and on the experimental branch.
 
-[unreleased]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.2.0...HEAD
+[unreleased]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/byrodi/dwarf-builds-drg/releases/tag/v0.1.0
