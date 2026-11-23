@@ -22,12 +22,15 @@ from dwarfbuilds.common import (BLACK_TEXT, BODY, BODY_BOLD, CARBON, CHARID, CHI
                                WINDOWWIDGET, Graph, border, box, cls, colour, font, game_button, hslot, image, margin,
                                oslot, ref, slate, soft_load, t, text, vslot, w)
 from dwarfbuilds.common import HUBMOD, MODHUB  # noqa: E402
+from dwarfbuilds.common import INVENTORY, PLAYERCHAR, SCAN  # noqa: E402
+from dwarfbuilds.scan import SCAN_ZORDER  # noqa: E402
 
 ACTOR = "/Script/Engine.Actor"
 CONTROLLER = "/Script/Engine.Controller"
 PLAYERCONTROLLER = "/Script/Engine.PlayerController"
 PLAYERSTATE = "/Script/Engine.PlayerState"
 GAMEINSTANCE = FSD + "FSDGameInstance"
+ITEM = FSD + "Item"
 CAMERA_LOCATION = FSD + "ECharselectionCameraLocation"
 INPUTLIB = "/Script/Engine.KismetInputLibrary"
 MARGIN = "/Script/SlateCore.Margin"
@@ -2104,8 +2107,10 @@ def g_init_poll(rig):
     g = Graph()
     me = g.self_()
     g.call("input", "TakeInput")
+    g.call("dwarf", GFL + ":GetLocalPlayerCharacter")
+    g.call("hook", "ScanHook", Dwarf=ref("dwarf.ReturnValue"))
     g.call("try", "TryShow")
-    g.flow("entry", "input")
+    g.flow("entry", "input", "hook")
     valid(g, "hasSel", g.get("sel0", "SelectUI"))
     g.call("att", cls(SELECT) + ":IsAttached", target=ref(g.get("sel1", "SelectUI")))
     g.branch("brAtt", "att.Up")
@@ -2113,7 +2118,7 @@ def g_init_poll(rig):
     g.call("now", GS + ":GetRealTimeSeconds")
     g.branch("brTime", kml(g, "early", "Less_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("until", "PollUntil"))))
     g.call("stop", KSL + ":K2_ClearTimer", Object=ref(me), FunctionName="SelectPoll")
-    g.flow("input", "try", "brHasSel", "att", "brAtt", "brCanvas", "stop")
+    g.flow("hook", "try", "brHasSel", "att", "brAtt", "brCanvas", "stop")
     g.flow("brAtt.else", "brTime")
     g.flow("brHasSel.else", "brTime")
     g.flow("brTime.else", "stop")
@@ -2225,6 +2230,94 @@ def select_events(g, after, rig):
     g.flow("brGi2Ok.else", "endClear")
 
 
+def scan_events(g, after, end):
+    """The loadout scan (scan.py) in the event graph. After `after`: ScanHook with the local dwarf, and the game
+    instance's OnLocalPlayerCharacterSet bound to do the same later (a client's dwarf comes after BeginPlay).
+    SelectPoll calls ScanHook too, in case that event is not sent. After `end` (EndPlay's last node): the game
+    instance is unbound (it outlives the level) and the layer removed."""
+    g.node("scanChar", "customevent", name="DB_LocalCharacter", signature=GAMEINSTANCE + ":OnLocalPlayerCharacterSet")
+    g.call("scanGi", GFL + ":GetFSDGameInstance")
+    valid(g, "scanGiOk", "scanGi.ReturnValue")
+    g.node("scanBind", "adddelegate", name="OnLocalPlayerCharacterSet", **{"class": GAMEINSTANCE})
+    g.link("scanGi.ReturnValue", "scanBind.self")
+    g.link("scanChar.OutputDelegate", "scanBind.Delegate")
+    g.call("scanNow", GFL + ":GetLocalPlayerCharacter")
+    g.call("scanHookNow", "ScanHook", Dwarf=ref("scanNow.ReturnValue"))
+    g.call("scanHookEvent", "ScanHook", Dwarf=ref("scanChar.PlayerCharacter"))
+    g.flow(after, "brScanGiOk", "scanBind", "scanHookNow")
+    g.flow("brScanGiOk.else", "scanHookNow")
+    g.flow("scanChar", "scanHookEvent")
+    g.call("scanGi2", GFL + ":GetFSDGameInstance")
+    valid(g, "scanGi2Ok", "scanGi2.ReturnValue")
+    g.node("scanUnbind", "removedelegate", name="OnLocalPlayerCharacterSet", **{"class": GAMEINSTANCE})
+    g.link("scanGi2.ReturnValue", "scanUnbind.self")
+    g.link("scanChar.OutputDelegate", "scanUnbind.Delegate")
+    valid(g, "scanUiEnd", g.get("scanUi6", "ScanUI"))
+    g.call("scanRemove", UMG + "Widget:RemoveFromParent", target=ref(g.get("scanUi7", "ScanUI")))
+    g.flow(end, "brScanGi2Ok", "scanUnbind", "brScanUiEnd", "scanRemove")
+    g.flow("brScanGi2Ok.else", "brScanUiEnd")
+
+
+def g_init_scan_hook():
+    """Dwarf (the local player's): when it is not the one hooked already, its inventory's "item taken out" and
+    "item put away" events call ScanEquipped and ScanUnequipped. No timer and no Tick: the scan layer ticks by
+    itself, and only while the laser pointer is out."""
+    g = Graph()
+    g.call("ok", KSL + ":IsValid", Object=ref("entry.Dwarf"))
+    differs = kml(g, "differs", "NotEqual_ObjectObject", A=ref("entry.Dwarf"), B=ref(g.get("old", "ScanChar")))
+    g.branch("brFresh", kml(g, "fresh", "BooleanAND", A=ref("ok.ReturnValue"), B=ref(differs)))
+    g.set("keep", "ScanChar", value="entry.Dwarf")
+    inventory = g.get("inv", "InventoryComponent", PLAYERCHAR, g.get("dwarf", "ScanChar"))
+    valid(g, "invOk", inventory)
+    for suffix, prop, fn in (("Eq", "OnItemEquipped", "ScanEquipped"), ("Un", "OnItemUnequipped", "ScanUnequipped")):
+        g.node("make" + suffix, "createdelegate", fn=fn)
+        g.node("bind" + suffix, "adddelegate", name=prop, **{"class": INVENTORY})
+        g.link(inventory, "bind%s.self" % suffix)
+        g.link("make%s.OutputDelegate" % suffix, "bind%s.Delegate" % suffix)
+    g.flow("entry", "brFresh", "keep", "brInvOk", "bindEq", "bindUn")
+    return g.data()
+
+
+def scan_pointer(g, nid):
+    """The hooked dwarf's laser pointer (its inventory's LaserPointerItem)."""
+    return g.get(nid + "Ptr", "LaserPointerItem", INVENTORY,
+                 g.get(nid + "Inv", "InventoryComponent", PLAYERCHAR, g.get(nid + "Dwarf", "ScanChar")))
+
+
+def g_init_scan_equipped():
+    """An item was taken out. The laser pointer: DB_Scan.Point(pointer); the layer is made and added to the
+    viewport the first time. Anything else: Point(None)."""
+    g = Graph()
+    valid(g, "dwarfOk", g.get("dwarf0", "ScanChar"))
+    g.branch("brPtr", kml(g, "same", "EqualEqual_ObjectObject", A=ref("entry.Item"), B=ref(scan_pointer(g, "mine"))))
+    valid(g, "ui", g.get("ui0", "ScanUI"))
+    g.call("pc", GS + ":GetPlayerController", PlayerIndex="0")
+    g.call("create", WBL + ":Create", WidgetType=cls(SCAN), OwningPlayer=ref("pc.ReturnValue"))
+    g.cast("as", cls(SCAN), "create.ReturnValue")
+    g.set("keepUi", "ScanUI", value="as.$cast")
+    g.call("data", GS + ":GetActorOfClass", ActorClass=cls(DATA))
+    g.set("setData", "Data", cls(SCAN), "as.$cast", "data.ReturnValue")
+    g.call("add", UMG + "UserWidget:AddToViewport", target=ref("as.$cast"), ZOrder=str(SCAN_ZORDER))
+    g.call("on", cls(SCAN) + ":Point", target=ref(g.get("ui1", "ScanUI")), Pointer=ref(scan_pointer(g, "on")))
+    valid(g, "uiOff", g.get("ui2", "ScanUI"))
+    g.call("off", cls(SCAN) + ":Point", target=ref(g.get("ui3", "ScanUI")))
+    g.flow("entry", "brDwarfOk", "brPtr", "brUi", "on")
+    g.flow("brUi.else", "create", "as", "keepUi", "data", "setData", "add", "on")
+    g.flow("brPtr.else", "brUiOff", "off")
+    return g.data()
+
+
+def g_init_scan_unequipped():
+    """The laser pointer was put away (in case nothing else is taken out after it): Point(None)."""
+    g = Graph()
+    valid(g, "dwarfOk", g.get("dwarf0", "ScanChar"))
+    g.branch("brPtr", kml(g, "same", "EqualEqual_ObjectObject", A=ref("entry.Item"), B=ref(scan_pointer(g, "mine"))))
+    valid(g, "ui", g.get("ui0", "ScanUI"))
+    g.call("off", cls(SCAN) + ":Point", target=ref(g.get("ui1", "ScanUI")))
+    g.flow("entry", "brDwarfOk", "brPtr", "brUi", "off")
+    return g.data()
+
+
 def g_mod_events(rig):
     """BeginPlay: one DB_Mod only; find or spawn DB_Data; on the host spawn DB_PerkShare_v1; wait for the
     local player controller, then take input (TakeInput; SelectPoll takes it again when a client's mission
@@ -2293,6 +2386,7 @@ def g_mod_events(rig):
     g.flow("brPC", "input")
     g.flow("brPC.else", "delay", "brPC")
     select_events(g, "input", rig)
+    scan_events(g, "tryNow", "hideEnd")   # after select_events' last BeginPlay and EndPlay nodes
     # The hotkey (on release, see DB_Window.OnKeyUp): DB_Data.OpenKey, B unless changed in Mod Hub, so the event
     # is AnyKey and each press and release is compared with it. Not consumed: the key keeps working for anything
     # else bound to it. The press arms it: a release whose press went to chat or another UI does not open the
@@ -2395,9 +2489,14 @@ def init_members():
                           t("ScreenClass", "class", USERWIDGET), t("AnchorClass", "class", USERWIDGET),
                           t("ClassesTried", B), obj("ScreenTmp", USERWIDGET), obj("CanvasTmp", CANVAS),
                           t("ZTmp", I, default=str(ZORDER_MISSION)), t("PollUntil", F),
-                          obj("InputPC", PLAYERCONTROLLER)],
+                          obj("InputPC", PLAYERCONTROLLER),
+                          # The scan: the local dwarf whose inventory is hooked (ScanHook), the scan layer.
+                          obj("ScanChar", PLAYERCHAR), obj("ScanUI", cls(SCAN))],
             "functions": [{"name": "TryShow"}, {"name": "FindScreen"}, {"name": "SelectPoll"},
-                          {"name": "HideSelect"}, {"name": "TakeInput"}]}
+                          {"name": "HideSelect"}, {"name": "TakeInput"},
+                          {"name": "ScanHook", "inputs": [obj("Dwarf", PLAYERCHAR)]},
+                          {"name": "ScanEquipped", "inputs": [obj("Item", ITEM)]},
+                          {"name": "ScanUnequipped", "inputs": [obj("Item", ITEM)]}]}
 
 
 def members():
@@ -2479,7 +2578,8 @@ def members():
 def init_graphs(rig):
     return {"EventGraph": g_mod_events(rig), "TryShow": g_init_try_show(), "FindScreen": g_init_find_screen(),
             "SelectPoll": g_init_poll(rig), "HideSelect": g_init_hide_select(),
-            "TakeInput": g_init_take_input()}
+            "TakeInput": g_init_take_input(), "ScanHook": g_init_scan_hook(),
+            "ScanEquipped": g_init_scan_equipped(), "ScanUnequipped": g_init_scan_unequipped()}
 
 
 def graphs():

@@ -34,14 +34,15 @@ from dwarfbuilds.common import (CARD, CELL, CHARID, CHIP, COLUMN, CORE, DATA, GE
                                LINEAR, OVERCLOCK, PERK, PERKASSET, PS, SHARE, SLOTBTN, TAKE, TEXTURE, TIP, UPGRADE,
                                USERWIDGET, WINDOW, WINDOWWIDGET, cls, t)
 from dwarfbuilds.common import DEFAULT_KEY, HUBMOD, HUBPAGE, KEY, LINK, MODHUB, SELECT, SETTINGS
+from dwarfbuilds.common import LASERPOINTER, SCAN, SCANITEM
 
 ACTOR = "/Script/Engine.Actor"
 
 # Declaration order: a widget tree may only contain mod widgets declared before it.
 # Graphs are built in this order too: DB_Data calls DB_BuildShare_v2's Server_SetCode, a custom event, which exists
 # only once that asset's graphs are compiled, so LINK comes before DATA.
-DECLARE_ORDER = [TIP, CELL, PERK, CARD, GEAR, COLUMN, CHIP, SLOTBTN, TAKE, WINDOW, SELECT, SETTINGS, LINK, DATA, SHARE,
-                 HUBPAGE, HUBMOD, CORE, INIT_SPACERIG, INIT_CAVE]
+DECLARE_ORDER = [TIP, CELL, PERK, CARD, GEAR, COLUMN, CHIP, SLOTBTN, TAKE, WINDOW, SELECT, SCANITEM, SCAN, SETTINGS,
+                 LINK, DATA, SHARE, HUBPAGE, HUBMOD, CORE, INIT_SPACERIG, INIT_CAVE]
 
 ASSETS = {
     # path: (kind, parent class, owner module)
@@ -59,6 +60,11 @@ ASSETS = {
     # left, your own on the right in place of the game's class description box (its frame is hidden),
     # scaled down; shown and hidden by InitSpacerig/InitCave. Private API only.
     SELECT: ("widget", USERWIDGET, "shell"),
+    # Loadout scan (scan.py): while the laser pointer rests on a teammate, their weapons, grenade and perks float
+    # around them. DB_Scan is a full-screen layer made by InitSpacerig/InitCave when the pointer is first taken out;
+    # it ticks only while the pointer is out (and for the moment it fades).
+    SCANITEM: ("widget", USERWIDGET, "scan"),
+    SCAN: ("widget", USERWIDGET, "scan"),
     # The mod's own settings, saved in slot common.SAVE_SLOT: MoreInfo and OpenKey (see DB_Data).
     SETTINGS: ("blueprint", "/Script/Engine.SaveGame", "data"),
     DATA: ("blueprint", ACTOR, "data"),
@@ -274,6 +280,14 @@ PUBLIC = {
     HUBPAGE: {"variables": [], "functions": []},
     HUBMOD: {"variables": [], "functions": []},
     SELECT: {"variables": [], "functions": []},
+    SCANITEM: {"variables": [obj("Data", cls(DATA))], "functions": [
+        # Item None = UNKNOWN without a picture. Tint: the scanned player's class colour (picture and rule).
+        # WithOc: the overclock line is shown (NO OVERCLOCK when Overclock is None); else it is left out.
+        {"name": "Show", "inputs": [obj("Item", ITEMID), obj("Overclock", OVERCLOCK), t("Tint", "struct", LINEAR),
+                                    t("WithOc", B)]}]},
+    SCAN: {"variables": [obj("Data", cls(DATA))], "functions": [
+        # The laser pointer was taken out (Pointer: the local player's ALaserPointerItem) or put away (None).
+        {"name": "Point", "inputs": [obj("Pointer", LASERPOINTER)]}]},
     CORE: {"variables": [], "functions": []},
     INIT_SPACERIG: {"variables": [], "functions": []},
     INIT_CAVE: {"variables": [], "functions": []},

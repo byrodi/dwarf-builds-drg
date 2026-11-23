@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23
+
+### Added
+
+- Loadout scan: hold the laser pointer on a teammate and their weapons with overclocks, their grenade and their
+  perks float around them in their class colour, tied to them by thin lines. It starts after the pointer rests
+  on the dwarf for a moment, follows the dwarf, dims when the pointer slips off and folds back into the dwarf
+  when you look away. It runs only while the laser pointer is out.
+
 ## [0.3.0] - 2026-11-23
 
 ### Fixed
@@ -59,7 +68,8 @@ version takes from their rewrite of the mod.
 - Mod Hub page to change the key that opens the window.
 - Works on the release game and on the experimental branch.
 
-[unreleased]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.3.0...HEAD
+[unreleased]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/byrodi/dwarf-builds-drg/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/byrodi/dwarf-builds-drg/releases/tag/v0.1.0
