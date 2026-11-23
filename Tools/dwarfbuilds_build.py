@@ -1,6 +1,7 @@
 """Builds the Dwarf Builds Blueprints with the BPForge editor plugin.
 
-Usage: python Tools/dwarfbuilds_build.py [--only data|widgets|shell] [--save]
+Usage: python Tools/dwarfbuilds_build.py [--only data|widgets|shell|scan|hub] [--save] [--dev]
+--dev makes a dev build (common.DEV: test helpers, version ...-dev). Never release or upload one.
 Without --save every asset is transient: it compiles and nothing is written (a check).
 --save regenerates Content/_DwarfBuilds from scratch (all modules; --only is not allowed with it), and imports the
 art (Tools/dwarfbuilds/art/*.png -> Content/_DwarfBuilds/Art, Tools/dwarfbuilds_art.py) first.
@@ -83,7 +84,12 @@ def main():
         cmd += ["--only", only]
     if not save:
         cmd.append("--transient")
-    subprocess.check_call(cmd)
+    env = dict(os.environ)
+    env.pop("DWARFBUILDS_DEV", None)   # only --dev makes a dev build
+    if "--dev" in args:
+        env["DWARFBUILDS_DEV"] = "1"
+        print("DEV BUILD: test helpers are in. Do not release it.")
+    subprocess.check_call(cmd, env=env)
 
     acquire()
     try:

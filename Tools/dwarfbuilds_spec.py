@@ -1,6 +1,6 @@
 """Writes the BPForge spec (JSON) of the Dwarf Builds mod.
 
-Usage: python Tools/dwarfbuilds_spec.py <out.json> [--only data|widgets|shell] [--transient]
+Usage: python Tools/dwarfbuilds_spec.py <out.json> [--only data|widgets|shell|scan|hub] [--transient]
 The mod is split into modules (Tools/dwarfbuilds/<module>.py), each owning some assets (contract.ASSETS).
 A module may define: trees() -> {path: widget tree}, members() -> {path: {"variables", "functions"}} (private),
 graphs() -> {path: {graph name: graph}}, class_defaults() -> {path: {property: value}}.
@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dwarfbuilds import contract  # noqa: E402
 
-MODULES = ["data", "widgets", "shell", "hub"]
+MODULES = ["data", "widgets", "shell", "scan", "hub"]
 
 
 def load(name):

@@ -16,6 +16,7 @@ included here as the `Web` submodule.
 - Press B to see every player's weapons, upgrades, overclocks, equipment and perks. With
   [Mod Hub](https://mod.io/g/drg/m/mod-hub) the key can be changed on the mod's page there.
 - The class selection screen shows your team's builds next to yours.
+- Hold the laser pointer on a teammate: their weapons, overclocks, grenade and perks float around them.
 - Copy any build as a short code, or paste one to preview it.
 - TAKE BUILD saves a code into one of your loadouts, using only what you own.
 - BROWSE opens the build website in the Steam overlay.
@@ -26,6 +27,11 @@ too, every player who has it shares their full build and perks with everyone; pl
 game sends. Lobbies can mix this version, 0.1.0 and players without the mod.
 
 ## Screenshots
+
+**Loadout scan (laser pointer).** Hold the pointer on a teammate: their weapons with overclocks, grenade and perks
+float around them in their class colour.
+
+![The loadout scan: a Driller under the laser pointer with Cryo Cannon, Colette Wave Cooker and Impact Axe floating around them](.github/images/loadout-scan.jpg)
 
 **The window (B).** One column per player: weapons with every upgrade tier, overclocks, equipment and perks,
 with tooltips in the game's style.
@@ -47,7 +53,7 @@ in the Steam overlay.
 
 ## Installation
 
-Subscribe on [mod.io](https://mod.io/g/drg/m/dwarf-builds), or download `dwarf-builds-0.3.0.zip` from the
+Subscribe on [mod.io](https://mod.io/g/drg/m/dwarf-builds), or download `dwarf-builds-0.4.0.zip` from the
 [latest release](https://github.com/byrodi/dwarf-builds-drg/releases/latest) and add it to
 [mint](https://github.com/trumank/mint) as a local mod, then install the profile. Or build it from source (below).
 
@@ -55,6 +61,7 @@ Subscribe on [mod.io](https://mod.io/g/drg/m/dwarf-builds), or download `dwarf-b
 
 | Key or button | What it does |
 | --- | --- |
+| Laser pointer held on a teammate | Their weapons, overclocks, grenade and perks float around them. |
 | B (or your key from Mod Hub) | Opens the window (when no other game window is open). The same key or Escape closes it. |
 | TEAM | Everyone in the lobby, one column per player. |
 | BUILD CODE | Paste a code, preview it, take it into a loadout, copy or publish your own. |
@@ -81,6 +88,8 @@ You need Unreal Engine 4.27, Python 3.11 or newer, Deep Rock Galactic installed 
    ```
    python Tools/dwarfbuilds_build.py --save
    ```
+   `--dev` makes a test build: the laser pointer scan also works on bots (for example
+   [Beard Bots](https://mod.io/g/drg/m/beard-bots)) and enemies, with sample builds. Never release a dev build.
 5. Cook and pack. The pak lands in `DRGModdingAutomationScripts/Temp/dwarfbuilds.pak`:
    ```
    python Tools/pack_mod.py _DwarfBuilds dwarfbuilds

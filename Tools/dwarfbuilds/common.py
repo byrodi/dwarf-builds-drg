@@ -11,7 +11,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bp_dsl import ACTOR, GS, KARR, KMAP, KML, KSL, KSTR, KTXT, UMG, WBL, Graph, ref, t  # noqa: F401,E402
 
 MOD_NAME = "Dwarf Builds"
-MOD_VERSION = "0.3.0"
+# A dev build (Tools/dwarfbuilds_build.py --dev, which sets DWARFBUILDS_DEV=1) has test helpers that a release
+# must not have: see scan.py. Its version ends with -dev (shown on the Mod Hub page).
+DEV = os.environ.get("DWARFBUILDS_DEV", "") == "1"
+MOD_VERSION = "0.4.0" + ("-dev" if DEV else "")
 CODE_VERSION = "DB1"  # first field of a build code
 SITE_URL = "https://dwarfbuilds.pages.dev"   # the website (BROWSE, PUBLISH MY BUILD, OPEN IN BROWSER)
 
@@ -43,6 +46,8 @@ TIP = UI + "DB_Tip"
 CHIP = UI + "DB_Chip"
 SLOTBTN = UI + "DB_SlotBtn"
 SELECT = UI + "DB_Select"             # builds shown on the game's class selection screen
+SCAN = UI + "DB_Scan"                 # loadout scan: a teammate's weapons float around them under the laser pointer
+SCANITEM = UI + "DB_ScanItem"         # one floating item of the scan (picture, name, overclock)
 SETTINGS = MOD + "DB_Settings"        # the mod's own save game (save slot SAVE_SLOT)
 HUBMOD = MOD + "DB_Hub"               # registers the mod with Mod Hub (spawned only when Mod Hub is installed)
 HUBPAGE = UI + "DB_HubPage"           # the mod's Mod Hub page: the hotkey
@@ -57,6 +62,9 @@ PS = FSD + "FSDPlayerState"
 GAMESTATE = FSD + "FSDGameState"
 PC = FSD + "FSDPlayerController"
 CHARID = FSD + "PlayerCharacterID"
+PLAYERCHAR = FSD + "PlayerCharacter"
+INVENTORY = FSD + "InventoryComponent"
+LASERPOINTER = FSD + "LaserPointerItem"
 ITEMID = FSD + "ItemID"
 ITEMDATA = FSD + "ItemData"
 UPGRADE = FSD + "ItemUpgrade"
