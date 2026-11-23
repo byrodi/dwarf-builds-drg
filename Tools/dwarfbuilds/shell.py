@@ -2103,7 +2103,9 @@ def g_init_poll(rig):
     The same on the Space Rig and in a mission."""
     g = Graph()
     me = g.self_()
+    g.call("input", "TakeInput")
     g.call("try", "TryShow")
+    g.flow("entry", "input")
     valid(g, "hasSel", g.get("sel0", "SelectUI"))
     g.call("att", cls(SELECT) + ":IsAttached", target=ref(g.get("sel1", "SelectUI")))
     g.branch("brAtt", "att.Up")
@@ -2111,10 +2113,28 @@ def g_init_poll(rig):
     g.call("now", GS + ":GetRealTimeSeconds")
     g.branch("brTime", kml(g, "early", "Less_FloatFloat", A=ref("now.ReturnValue"), B=ref(g.get("until", "PollUntil"))))
     g.call("stop", KSL + ":K2_ClearTimer", Object=ref(me), FunctionName="SelectPoll")
-    g.flow("entry", "try", "brHasSel", "att", "brAtt", "brCanvas", "stop")
+    g.flow("input", "try", "brHasSel", "att", "brAtt", "brCanvas", "stop")
     g.flow("brAtt.else", "brTime")
     g.flow("brHasSel.else", "brTime")
     g.flow("brTime.else", "stop")
+    return g.data()
+
+
+def g_init_take_input():
+    """The hotkey's input on the local player controller (GetPlayerController 0) when it is not the one that has
+    it (InputPC). The Space Rig and missions have different controller classes (BP_PlayerController_SpaceRig,
+    BP_PlayerController), so the seamless travel into a mission swaps the controller. The host has the new one
+    before BeginPlay; a client gets it from the server a moment later, and input enabled on the old one never
+    reaches this actor again (B did nothing in missions on clients). Run at BeginPlay and by SelectPoll, which
+    runs for a while after BeginPlay and after any game window opens: no timer of its own. One compare when
+    nothing changed."""
+    g = Graph()
+    g.call("pc", GS + ":GetPlayerController", PlayerIndex="0")
+    valid(g, "pcOk", "pc.ReturnValue")
+    g.branch("brNew", kml(g, "isNew", "NotEqual_ObjectObject", A=ref("pc.ReturnValue"), B=ref(g.get("old", "InputPC"))))
+    g.call("enable", ACTOR + ":EnableInput", PlayerController=ref("pc.ReturnValue"))
+    g.set("keep", "InputPC", value="pc.ReturnValue")
+    g.flow("entry", "brPcOk", "brNew", "enable", "keep")
     return g.data()
 
 
@@ -2207,7 +2227,8 @@ def select_events(g, after, rig):
 
 def g_mod_events(rig):
     """BeginPlay: one DB_Mod only; find or spawn DB_Data; on the host spawn DB_PerkShare_v1; wait for the
-    local player controller, then take input and hook the class selection overlay (select_events; rig: InitSpacerig).
+    local player controller, then take input (TakeInput; SelectPoll takes it again when a client's mission
+    controller arrives) and hook the class selection overlay (select_events; rig: InitSpacerig).
     B toggles the window on release, after a press the game saw."""
     g = Graph()
     g.node("begin", "event", name="ReceiveBeginPlay", **{"class": ACTOR})
@@ -2267,7 +2288,7 @@ def g_mod_events(rig):
     g.call("pcGet", GS + ":GetPlayerController", PlayerIndex="0")
     g.call("pcOk", KSL + ":IsValid", Object=ref("pcGet.ReturnValue"))
     g.branch("brPC", "pcOk.ReturnValue")
-    g.call("input", ACTOR + ":EnableInput", PlayerController=ref("pcGet.ReturnValue"))
+    g.call("input", "TakeInput")
     g.call("delay", KSL + ":Delay", Duration="0.5")
     g.flow("brPC", "input")
     g.flow("brPC.else", "delay", "brPC")
@@ -2369,13 +2390,14 @@ def init_members():
     """InitSpacerig / InitCave. KeyArmed: B was pressed while the game had the input (the release may open the
     window). SelectUI: the class selection overlay of this level; ScreenClass, AnchorClass (loaded once,
     ClassesTried), ScreenTmp, CanvasTmp, ZTmp: TryShow's working values; PollUntil: end of the search for the
-    screen."""
+    screen; InputPC: the controller the hotkey's input is on (TakeInput)."""
     return {"variables": [t("KeyArmed", B), t("KeyArmedAt", F), obj("SelectUI", cls(SELECT)),
                           t("ScreenClass", "class", USERWIDGET), t("AnchorClass", "class", USERWIDGET),
                           t("ClassesTried", B), obj("ScreenTmp", USERWIDGET), obj("CanvasTmp", CANVAS),
-                          t("ZTmp", I, default=str(ZORDER_MISSION)), t("PollUntil", F)],
+                          t("ZTmp", I, default=str(ZORDER_MISSION)), t("PollUntil", F),
+                          obj("InputPC", PLAYERCONTROLLER)],
             "functions": [{"name": "TryShow"}, {"name": "FindScreen"}, {"name": "SelectPoll"},
-                          {"name": "HideSelect"}]}
+                          {"name": "HideSelect"}, {"name": "TakeInput"}]}
 
 
 def members():
@@ -2456,7 +2478,8 @@ def members():
 
 def init_graphs(rig):
     return {"EventGraph": g_mod_events(rig), "TryShow": g_init_try_show(), "FindScreen": g_init_find_screen(),
-            "SelectPoll": g_init_poll(rig), "HideSelect": g_init_hide_select()}
+            "SelectPoll": g_init_poll(rig), "HideSelect": g_init_hide_select(),
+            "TakeInput": g_init_take_input()}
 
 
 def graphs():

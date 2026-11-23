@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bp_dsl import ACTOR, GS, KARR, KMAP, KML, KSL, KSTR, KTXT, UMG, WBL, Graph, ref, t  # noqa: F401,E402
 
 MOD_NAME = "Dwarf Builds"
-MOD_VERSION = "0.2.0"
+MOD_VERSION = "0.3.0"
 CODE_VERSION = "DB1"  # first field of a build code
 SITE_URL = "https://dwarfbuilds.pages.dev"   # the website (BROWSE, PUBLISH MY BUILD, OPEN IN BROWSER)
 

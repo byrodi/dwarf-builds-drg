@@ -47,7 +47,7 @@ in the Steam overlay.
 
 ## Installation
 
-Subscribe on [mod.io](https://mod.io/g/drg/m/dwarf-builds), or download `dwarf-builds-0.2.0.zip` from the
+Subscribe on [mod.io](https://mod.io/g/drg/m/dwarf-builds), or download `dwarf-builds-0.3.0.zip` from the
 [latest release](https://github.com/byrodi/dwarf-builds-drg/releases/latest) and add it to
 [mint](https://github.com/trumank/mint) as a local mod, then install the profile. Or build it from source (below).
 
